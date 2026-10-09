@@ -1,7 +1,7 @@
 // Tool Gateway — the only path from an agent to any effect (architecture.md §6.8, INV-5).
 // Every call: verify credential → check lease epoch against the ledger → validate arguments →
 // check grants → PDP decision → audit record → execute → return tainted, labeled output.
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { hashOf } from '../domain/hash.js';
@@ -38,6 +38,11 @@ function safePath(ws: Workspace | null, p: string): string {
   const rel = path.relative(ws.dir, full);
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new DomainError('validation', 'Path escapes the workspace');
   if (rel.split(path.sep)[0] === '.git') throw new DomainError('validation', 'The .git directory is managed by the platform');
+  // Resolve symlinks on the deepest existing ancestor so links created inside the workspace cannot escape it.
+  let probe = full;
+  while (!existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+  const realRel = path.relative(realpathSync(ws.dir), realpathSync(probe));
+  if (realRel.startsWith('..') || path.isAbsolute(realRel)) throw new DomainError('validation', 'Path escapes the workspace via a link');
   return full;
 }
 

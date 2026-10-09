@@ -108,7 +108,7 @@ We implement this as a set of hard separations:
 | D9 | Audit | Append-only, **hash-chained** ledger events per tenant, with periodic signed checkpoints written to WORM storage (S3 Object Lock) | §16 |
 | D10 | Code execution | **MicroVM or user-space-kernel sandboxes** (Firecracker via E2B, or Kubernetes Agent Sandbox with gVisor/Kata). Default-deny egress, brokered secrets, quotas | §16 |
 | D11 | Tools protocol | Internal tools are typed platform APIs. External tools are exposed through an **MCP-compatible gateway** that the platform mediates, so agents never connect to MCP servers directly | §6, §16 |
-| D12 | Deployment | Three tiers: **Managed** (SaaS, BYO model keys), **Hybrid** (SaaS control plane; customer-hosted execution and content plane, with client-side payload encryption), **Self-Hosted** (Helm) | §17 |
+| D12 | Deployment | **Customer-hosted (decision update, 2026-10-08):** the platform vendor hosts nothing. Each company runs the platform on its own infrastructure: its own PostgreSQL, model providers/keys, code hosting, and sandbox. The Managed and Hybrid tiers below remain documented as future options only | §17 |
 
 ### 1.5 What Success Looks Like (MVP)
 
@@ -3965,6 +3965,8 @@ The platform supports governance frameworks: NIST AI RMF and its Generative AI P
 ---
 
 ## 17. Deployment Architecture and Operational Requirements
+
+> **Decision update (2026-10-08).** The product owner's direction is that the platform vendor hosts no infrastructure. Every company runs The AI Company against resources it provides: database, model providers and keys, code/deliverable hosting, and an isolated sandbox. The **Self-Hosted** tier is therefore the only tier for now. The reference implementation (`README.md`, `docs/connect-your-infrastructure.md`) follows the single-Postgres path in §4.3. It uses an outbox-driven orchestrator implementing `OrchestratorPort` (§7.10), so the only stateful dependency a customer must run is PostgreSQL. A Temporal adapter remains the scale-out option. The Managed and Hybrid tiers described below are retained as future options and are not current commitments.
 
 ### 17.1 Platform vs. Customer Ownership
 
