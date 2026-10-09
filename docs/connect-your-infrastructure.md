@@ -58,9 +58,22 @@ branch protection so only the platform's release step can merge.
 
 ## 4. Sandbox (required for production)
 
-Agents run commands such as tests and builds. In production these **must** run in an isolated sandbox:
-a Firecracker microVM (e.g. E2B self-hosted), Kubernetes Agent Sandbox with gVisor/Kata, or your
-equivalent. Implement `SandboxPort` (`src/execution/sandbox.ts`) for your sandbox.
+Agents run commands such as tests and builds. In production these **must** run in an isolated
+sandbox. The simplest option uses your own Docker:
+
+```yaml
+sandbox:
+  kind: docker
+  docker: { image: node:22-bookworm-slim, memory: 2g, cpus: 2, pids: 512, network: none }
+```
+
+Each command runs in a fresh container with no network, all capabilities dropped,
+`no-new-privileges`, a read-only root filesystem, a non-root user, memory/CPU/PID limits, and only
+the run's workspace mounted. Use an image that has your toolchain. With `network: none`, dependency
+installs must already be in the image or the workspace.
+
+For stronger isolation use a microVM (e.g. self-hosted E2B/Firecracker) or Kubernetes Agent Sandbox
+with gVisor/Kata by implementing `SandboxPort` (`src/execution/sandbox.ts`).
 
 `sandbox.allow_unisolated_local: true` runs commands as local processes. Those processes get a
 scrubbed environment, timeouts, and output caps, but they are **not isolated**. Use it only on a
@@ -75,6 +88,12 @@ trusted evaluation machine.
   retried within their attempt limits.
 - Customer policies: drop extra `.cedar` files into a `policies/` folder next to your templates.
   Baseline `forbid` rules cannot be weakened.
+
+## Readiness check
+
+`aic doctor` checks the database, ledger integrity, provider keys and prices, reviewer model-family
+independence, the team catalog, code hosting, sandbox isolation, secrets, and dashboard access. It
+tells you what to fix before production.
 
 ## Production checklist
 

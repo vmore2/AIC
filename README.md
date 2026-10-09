@@ -43,9 +43,10 @@ Requires Node.js ≥ 22 and git.
 ```bash
 npm install
 npx aic init --company "Acme Inc" --ceo "Your Name"   # writes aic.config.yaml + creates the ledger
-npx aic org departments                                # 11 department templates
-npx aic org show engineering                           # roles, structure, workflows, safeguards
+npx aic teams                                          # recommended + your custom teams
+npx aic teams show engineering                         # roles, structure, workflow, safeguards
 npx aic hire engineering                               # validates model capabilities per role
+npx aic doctor                                         # readiness checks for your infrastructure
 
 npx aic chat engineering_lead "I want a slugify(text) helper for our URLs: lowercase words joined by single hyphens, punctuation removed, no leading or trailing hyphens."
 npx aic confirm <directive-id>                         # the lead's proposal becomes an objective
@@ -88,7 +89,38 @@ models:
 See [`docs/connect-your-infrastructure.md`](docs/connect-your-infrastructure.md) for the database, GitHub,
 sandbox, and production checklist.
 
-## Departments (team architecture)
+## Teams (the employee architecture)
+
+**Defining a new team means listing its roles.** You write each role's title, a sentence about what it
+does, what it works with, and what it delivers. The platform derives tools, acceptance criteria,
+review chain, Rule-of-Two profile, reporting lines, workflow gates, budgets, and prompts, then
+enforces the architecture rules:
+
+```yaml
+team: growth_marketing
+name: Growth Marketing
+purpose: Find and test growth channels with reviewed experiment briefs and honest metrics.
+roles:
+  - title: Growth Lead
+    lead: true
+    does: Turns growth goals into experiment plans with measurable success criteria.
+  - title: Growth Analyst
+    count: 2
+    does: Designs experiments and writes a brief with hypothesis, setup, and success metric.
+    works_with: [documents, analytics]
+    delivers: [{ document: growth/EXPERIMENT.md, sections: [Hypothesis, Setup, Success Metric] }]
+    human_judges: The CEO approves the experiment before launch
+  - title: Growth Reviewer
+    reviews: [Growth Analyst]
+    does: Independently checks each brief for a testable hypothesis and an honest metric.
+```
+
+Create teams in the dashboard (**Build a team**), with `aic teams new <key>`, or by copying a
+recommended team. **Recommended teams** (curated by The AI Company) ship in `templates/recommended/`.
+Design and HR are written in this short format. Each **company's custom teams** live in its own
+`teams/` folder. Full guide: [`docs/designing-teams.md`](docs/designing-teams.md).
+
+### Recommended teams
 
 | Department | Lead | Team | Independent reviewer | Default mode | Never autonomous |
 |---|---|---|---|---|---|
@@ -104,8 +136,7 @@ sandbox, and production checklist.
 | Business Operations | Operations Lead | Operations Analysts | Process Auditor | Milestone Gates | changing production systems |
 | Data & Analytics | Analytics Lead | Data Analysts | Analytics Reviewer | Exception Escalation | publishing metrics externally |
 
-Every template is data (`templates/departments/*.yaml`) and is checked by `aic org validate` against
-the architecture rules:
+Every team is data and is checked by `aic teams check` against the architecture rules:
 - separation of duties (reviewers sit outside the producer's chain and never hold side-effecting tools);
 - the Rule of Two (no role may combine untrusted input, private data, and external communication unless
   every external action is approval-gated);
@@ -114,7 +145,7 @@ the architecture rules:
 - human gates for high-risk departments;
 - human review for work that significantly affects individuals.
 
-To build your own department, see [`docs/designing-departments.md`](docs/designing-departments.md).
+To build your own team, see [`docs/designing-teams.md`](docs/designing-teams.md).
 
 ## How a piece of work flows
 
@@ -133,9 +164,9 @@ CEO ⇄ Team Lead (conversation) → proposal (directive) → CEO confirms (hash
 | Path | What it is |
 |---|---|
 | `architecture.md` | Full architecture and research basis |
-| `templates/departments/` | Department + role templates (the employee architecture) |
+| `templates/recommended/` | Recommended teams (short team specs or full templates) |
 | `src/domain/` | Pure rules: state machine, Completion Evaluator, delegation attenuation, modes |
-| `src/org/` | Template schemas, tool catalog (risk classes, Rule-of-Two traits), architecture validator |
+| `src/org/` | Team spec compiler, catalog (recommended + custom), schemas, tool catalog, architecture validator |
 | `src/ledger/` | Schema, Transition Engine (single writer, idempotent, hash-chained), commands |
 | `src/policy/` | Cedar baseline policies + embedded PDP (fail closed) |
 | `src/runtime/` | Model adapters, Tool Gateway, agent loop, context assembly, scripted model |
@@ -148,7 +179,8 @@ CEO ⇄ Team Lead (conversation) → proposal (directive) → CEO confirms (hash
 ## Tests
 
 ```bash
-npm test          # 51 tests: property-based state machine, ledger invariants, gateway red-team, conversations, end-to-end
+npm test          # 64 tests: property-based state machine, ledger invariants, gateway red-team, team specs,
+                  # requirement changes, model adapters, Docker sandbox posture, conversations, end-to-end
 npm run typecheck
 ```
 
@@ -159,14 +191,17 @@ transition engine, Cedar authorization, verification pipeline, orchestration, co
 CLI and dashboard, all exercised end to end by tests.
 
 Known gaps, deliberately documented:
-- **Sandbox isolation is the customer's to provide.** The bundled local sandbox runs commands as plain
-  processes (scrubbed env, timeouts) and is for evaluation only. Production needs a microVM or gVisor sandbox
-  behind `SandboxPort` (architecture.md §16.7).
+- **Sandbox:** `sandbox: { kind: docker }` runs every agent command in a locked-down container on the
+  company's own Docker. The container has no network, no capabilities, a read-only root, a non-root
+  user, and resource limits. Its security settings are unit-tested; a live container run has not yet
+  been exercised here because the Docker daemon wasn't running. `kind: local` is unisolated and for
+  evaluation only. MicroVM/gVisor sandboxes plug into the same `SandboxPort`.
 - **Connector tools** (GitHub PRs, email, CRM, design tools, …) are declared in the tool catalog with risk
   classes, but beyond git push/merge they need customer-installed connectors. Uninstalled connectors are refused.
 - **Single orchestrator process per company.** Leases, fencing, and drift repair make crashes safe, but
   horizontal scale-out (Temporal adapter, architecture.md §4.3) is future work.
 - **Local CLI = trusted CEO session.** Networked deployments need SSO + MFA in front of the API.
 - **Scripted model** handles only demo scenarios; real work needs a customer model profile.
-- Requirement change requests, reopen-on-regression from CI, memory curation UI, voice meetings, and the
-  template marketplace are designed in architecture.md but not yet built.
+- Requirement changes are built (`aic requirement`, dashboard → Requirements, or a lead's proposal in
+  conversation). Reopen-on-regression from CI, task reassignment UI, memory curation, voice meetings,
+  and a shared template marketplace are designed in architecture.md but not yet built.

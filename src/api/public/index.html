@@ -88,9 +88,26 @@ async function overview() {
       </div>
       ${o.discrepancy > 0 ? `<div class="warn">⚠ ${o.discrepancy} points claimed by employees but not yet independently verified.</div>` : ''}
       <div class="muted">${esc(o.deliveryReason)} · Budget $${o.budget.spent.toFixed(2)} / $${o.budget.limit.toFixed(2)} · ${Object.entries(o.tasks.byStatus).map(([k, v]) => `${k} ${v}`).join(' · ')}</div>
-      <div style="margin-top:8px"><button class="sec" onclick="tasks('${o.id}')">Tasks</button>
+      <div style="margin-top:8px"><button class="sec" onclick="tasks('${o.id}')">Tasks</button> <button class="sec" onclick="requirements('${o.id}')">Requirements</button>
         ${o.status === 'completed' ? `<button class="act" onclick="release('${o.id}')">Approve release to main</button>` : ''}</div>
     </div>`).join('');
+}
+async function requirements(objectiveId) {
+  const reqs = await api(`/api/objectives/${objectiveId}/requirements`);
+  view.innerHTML = `<div class="card"><button class="sec" onclick="refresh()">← Back</button><h3>Requirements</h3>
+    <p class="muted">Changing a requirement keeps its history, withdraws unaccepted work built on the old version, and asks the lead to re-plan for your approval. Accepted work stays accepted against the version it was built for.</p>
+    <table><tr><th>Key</th><th>Version</th><th>Text (verbatim)</th></tr>${reqs.map((r) => `<tr><td>${r.key}</td><td>v${r.version}</td><td>${esc(r.text)}</td></tr>`).join('')}</table>
+    <h4>Change or add a requirement</h4>
+    <div class="row"><div style="width:120px"><label>Key</label><input id="rq-key" placeholder="REQ-${reqs.length + 1}"></div><div style="flex:1"><label>Why</label><input id="rq-why" placeholder="Reason for the change"></div></div>
+    <label>New text</label><textarea id="rq-text" rows="3"></textarea>
+    <p><button class="act" onclick="submitRequirement('${objectiveId}')">Apply change</button></p><div id="rq-out"></div></div>`;
+}
+async function submitRequirement(objectiveId) {
+  const key = document.getElementById('rq-key').value.trim(), text = document.getElementById('rq-text').value.trim(), reason = document.getElementById('rq-why').value.trim();
+  try {
+    const r = await api(`/api/objectives/${objectiveId}/requirements`, { method: 'POST', body: JSON.stringify({ key, text, reason }) });
+    document.getElementById('rq-out').innerHTML = `<div class="ok">${key} is now v${r.version}. Withdrew ${r.superseded.length} task(s); ${r.keptAccepted.length} accepted task(s) kept. The lead will re-plan; watch your Inbox.</div>`;
+  } catch (e) { document.getElementById('rq-out').innerHTML = `<div class="bad">${esc(e.message)}</div>`; }
 }
 async function tasks(objectiveId) {
   const rows = await api('/api/tasks?objective=' + objectiveId);

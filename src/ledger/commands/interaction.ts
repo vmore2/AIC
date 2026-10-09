@@ -6,7 +6,7 @@ import { hashOf } from '../../domain/hash.js';
 import { newId } from '../../domain/ids.js';
 import { DomainError, type Handler } from '../engine.js';
 import { getEmployee, getRun } from '../store.js';
-import { createObjective } from './work.js';
+import { changeRequirement, createObjective } from './work.js';
 
 export const startConversation: Handler<{ employeeId: string; objectiveId?: string }, { conversationId: string }> = async (c, i) => {
   await c.authorize('conversation.start', { type: 'Employee', id: i.employeeId }, {});
@@ -60,6 +60,7 @@ export const CreateObjectivePayload = z.object({
 export const DirectivePayloads = {
   create_objective: CreateObjectivePayload,
   decision: z.object({ question: z.string().min(5), decision: z.string().min(2), objective_id: z.string() }),
+  change_requirement: z.object({ objective_id: z.string(), key: z.string().regex(/^[A-Z]+-\d+$/), text: z.string().min(5), reason: z.string().min(3) }),
 } as const;
 export type DirectiveType = keyof typeof DirectivePayloads;
 
@@ -94,6 +95,9 @@ export const confirmDirective: Handler<{ directiveId: string; payloadSha256: str
     const p = d.payload as unknown as z.infer<typeof CreateObjectivePayload> & { department_id: string };
     const key = (await c.q.query<{ key: string }>('SELECT key FROM departments WHERE id = $1', [p.department_id])).rows[0]!.key;
     result = await createObjective(c, { title: p.title, departmentKey: key, requirements: p.requirements, budgetUsd: p.budget_usd, settings: p.settings });
+  } else if (d.directive_type === 'change_requirement') {
+    const p = d.payload as unknown as z.infer<typeof DirectivePayloads.change_requirement>;
+    result = await changeRequirement(c, { objectiveId: p.objective_id, key: p.key, text: p.text, reason: p.reason });
   } else {
     const p = d.payload as { question: string; decision: string; objective_id: string };
     const id = newId('dec');

@@ -98,6 +98,12 @@ export function buildServer(app: App, token: string) {
     app.ledger.run('resumeScope', { scope: { type: 'company', id: (await db.query<{ id: string }>('SELECT id FROM company')).rows[0]!.id },
       mode: req.body.mode ?? app.config.defaults.mode, acknowledgeUnresolvedActions: !!req.body.ack, reason: req.body.reason ?? 'resume' }, await ceo(), key(req)));
   registerTeamRoutes(server, app, ceo);
+  server.get<{ Params: { id: string } }>('/api/objectives/:id/requirements', async (req) =>
+    (await db.query(`SELECT r.key, r.current_version AS version, rv.text FROM requirements r JOIN requirement_versions rv ON rv.requirement_id = r.id AND rv.version = r.current_version
+                     WHERE r.objective_id = $1 AND r.status = 'active' ORDER BY r.key`, [req.params.id])).rows);
+  server.post<{ Params: { id: string }; Body: { key: string; text: string; reason: string } }>('/api/objectives/:id/requirements', async (req) =>
+    app.ledger.run('changeRequirement', { objectiveId: req.params.id, key: req.body.key, text: req.body.text, reason: req.body.reason || 'changed by CEO' }, await ceo(), key(req)));
+  server.get('/api/doctor', async () => (await import('../ops/doctor.js')).runDoctor(app));
   server.post<{ Params: { id: string } }>('/api/objectives/:id/release', async (req) => {
     const sha = await app.workspaces.remoteSha(`refs/heads/${app.workspaces.integrationBranch(req.params.id)}`);
     if (!sha) throw new DomainError('not_found', 'No integration branch');

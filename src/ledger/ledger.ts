@@ -37,6 +37,7 @@ export const COMMANDS = {
   reopenTask: work.reopenTask,
   completeObjective: work.completeObjective,
   approveRelease: work.approveRelease,
+  changeRequirement: work.changeRequirement,
   startVerification: ver.startVerification,
   recordEvidence: ver.recordEvidence,
   evaluateTask: ver.evaluateTask,

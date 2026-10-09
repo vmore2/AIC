@@ -31,7 +31,10 @@ export type PlanTask = z.infer<typeof PlanTaskSchema>;
 export interface PlanContext {
   department: Department;
   leadRoleKey: string;
+  /** Requirements this plan must cover (the planning task's pinned refs). */
   requirementKeys: string[];
+  /** All active requirement keys tasks may reference (defaults to requirementKeys). */
+  knownRequirementKeys?: string[];
   budgetRemaining: number;
   riskFloor: RiskTier;
   settings: Record<string, string>;
@@ -80,6 +83,7 @@ export function validatePlan(raw: unknown, ctx: PlanContext): PlanValidation {
   const edges: { taskId: string; dependsOn: string }[] = [];
   const resolved: ResolvedPlanTask[] = [];
   const coverage: Record<string, string[]> = Object.fromEntries(ctx.requirementKeys.map((k) => [k, []]));
+  const known = new Set([...(ctx.knownRequirementKeys ?? []), ...ctx.requirementKeys]);
   let budget = 0;
 
   for (const t of plan.tasks) {
@@ -90,8 +94,8 @@ export function validatePlan(raw: unknown, ctx: PlanContext): PlanValidation {
     if (!leadsTeam.has(role.key) && role.category !== 'qa') errors.push(`[${t.ref}] "${role.key}" is not on the lead's team`);
     if (!role.task_kinds.includes(t.kind)) errors.push(`[${t.ref}] role "${role.key}" cannot own task kind "${t.kind}"`);
     for (const k of t.requirement_keys) {
-      if (!(k in coverage)) errors.push(`[${t.ref}] unknown requirement "${k}"`);
-      else coverage[k]!.push(t.ref);
+      if (!known.has(k)) errors.push(`[${t.ref}] unknown requirement "${k}"`);
+      else if (k in coverage) coverage[k]!.push(t.ref);
     }
     for (const d of t.depends_on) {
       if (!refs.has(d)) errors.push(`[${t.ref}] depends on unknown ref "${d}"`);

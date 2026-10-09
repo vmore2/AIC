@@ -5,6 +5,7 @@ import path from 'node:path';
 import { SYSTEM } from '../domain/types.js';
 import type { Ledger } from '../ledger/ledger.js';
 import { validatePlan } from '../ledger/plan.js';
+import { planCoverageKeys } from '../ledger/commands/work.js';
 import { getCriteria, getEmployee, getObjective, getTask } from '../ledger/store.js';
 import type { Department } from '../org/schema.js';
 import type { Workspaces } from '../execution/codeHost.js';
@@ -47,7 +48,8 @@ export async function runDeterministicVerifiers(d: VerifierDeps, taskId: string)
         const dept = (await q.query<{ template: Department }>('SELECT template FROM departments WHERE id = $1', [obj.department_id])).rows[0]!.template;
         const lead = await getEmployee(q, task.owner_employee_id!);
         const reqs = (await q.query<{ key: string }>(`SELECT key FROM requirements WHERE objective_id = $1 AND status = 'active'`, [obj.id])).rows.map((r) => r.key);
-        const v = p ? validatePlan(p.content, { department: dept, leadRoleKey: lead.role_key, requirementKeys: reqs, budgetRemaining: Number.MAX_SAFE_INTEGER, riskFloor: obj.risk_floor, settings: obj.settings }) : null;
+        const mustCover = await planCoverageKeys(q, taskId);
+        const v = p ? validatePlan(p.content, { department: dept, leadRoleKey: lead.role_key, requirementKeys: mustCover, knownRequirementKeys: reqs, budgetRemaining: Number.MAX_SAFE_INTEGER, riskFloor: obj.risk_floor, settings: obj.settings }) : null;
         await record(c.id, 'svc_plan_validator', 'platform_deterministic', v?.ok ? 'pass' : 'fail', { errors: v?.errors ?? ['no proposal'], coverage: v?.coverage ?? {} });
         continue;
       }

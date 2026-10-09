@@ -259,8 +259,9 @@ export const proposePlan: Handler<{ taskId: string; plan: unknown }, { proposalI
   const dept = await departmentOf(c, obj.department_id);
   const emp = await getEmployee(c.q, c.principal.id);
   const reqs = await c.q.query<{ key: string }>(`SELECT key FROM requirements WHERE objective_id = $1 AND status = 'active' ORDER BY key`, [obj.id]);
+  const mustCover = await planCoverageKeys(c.q, i.taskId);
   const validation = validatePlan(i.plan, {
-    department: dept, leadRoleKey: emp.role_key, requirementKeys: reqs.rows.map((r) => r.key),
+    department: dept, leadRoleKey: emp.role_key, requirementKeys: mustCover, knownRequirementKeys: reqs.rows.map((r) => r.key),
     budgetRemaining: Number(obj.budget_limit) - Number(obj.budget_spent) - Number(obj.budget_reserved) + Number(task.budget_limit) - Number(task.budget_spent),
     riskFloor: obj.risk_floor, settings: obj.settings,
   });
@@ -531,4 +532,83 @@ export const approveRelease: Handler<{ objectiveId: string; integrationSha: stri
       new Date(c.now.getTime() + 24 * 3600_000).toISOString()]);
   c.emit({ type: 'release.approved', aggregateType: 'objective', aggregateId: i.objectiveId, payload: { approval_id: approvalId, integration_sha: i.integrationSha } });
   return { approvalId };
+};
+
+/** Requirement keys a planning task's plan must cover: its own pinned requirement refs. */
+export async function planCoverageKeys(q: { query: <T>(s: string, p?: unknown[]) => Promise<{ rows: T[] }> }, planningTaskId: string): Promise<string[]> {
+  const r = await q.query<{ key: string }>(
+    `SELECT r.key FROM task_requirement_refs tr JOIN requirements r ON r.id = tr.requirement_id WHERE tr.task_id = $1 AND r.status = 'active' ORDER BY r.key`, [planningTaskId]);
+  return r.rows.map((x) => x.key);
+}
+
+/**
+ * Requirement change (architecture.md §8.7, §12.8): a new requirement version (or a new requirement).
+ * Not-yet-accepted work pinned to the old version is superseded (in-flight runs are fenced);
+ * accepted work stays accepted against the version it was built for; the lead re-plans the change.
+ */
+export const changeRequirement: Handler<{ objectiveId: string; key: string; text: string; reason: string }, { requirementId: string; version: number; superseded: string[]; keptAccepted: string[]; planningTaskId: string }> = async (c, i) => {
+  await c.authorize('requirement.change', { type: 'Objective', id: i.objectiveId }, { action_class: 'A2' });
+  if (i.text.trim().length < 5) throw new DomainError('validation', 'Requirement text is too short');
+  if (!/^[A-Z]+-\d+$/.test(i.key)) throw new DomainError('validation', 'Requirement keys look like REQ-3');
+  const obj = await getObjective(c.q, i.objectiveId, true);
+  if (obj.status === 'cancelled') throw new DomainError('guard_failed', 'Objective is cancelled');
+  let req = (await c.q.query<{ id: string; current_version: number }>('SELECT id, current_version FROM requirements WHERE objective_id = $1 AND key = $2 FOR UPDATE', [obj.id, i.key])).rows[0];
+  let version = 1;
+  if (!req) {
+    const id = newId('req');
+    await c.q.query('INSERT INTO requirements (id, objective_id, key, current_version) VALUES ($1,$2,$3,1)', [id, obj.id, i.key]);
+    req = { id, current_version: 1 };
+  } else {
+    version = Number(req.current_version) + 1;
+    await c.q.query('UPDATE requirements SET current_version = $2, status = $3 WHERE id = $1', [req.id, version, 'active']);
+  }
+  await c.q.query('INSERT INTO requirement_versions (requirement_id, version, text, text_sha256, authored_by) VALUES ($1,$2,$3,$4,$5)',
+    [req.id, version, i.text.trim(), sha256Hex(i.text.trim()), c.principal.id]);
+
+  // Work pinned to an older version of this requirement.
+  const affected = (await c.q.query<{ id: string; status: string; kind: string }>(
+    `SELECT t.id, t.status, t.kind FROM tasks t JOIN task_requirement_refs tr ON tr.task_id = t.id
+     WHERE tr.requirement_id = $1 AND tr.requirement_version < $2 AND t.status NOT IN ('cancelled','superseded')`, [req.id, version])).rows;
+  const superseded: string[] = [];
+  const keptAccepted: string[] = [];
+  for (const t of affected) {
+    if (t.status === 'accepted') { keptAccepted.push(t.id); continue; }
+    if (t.kind === 'planning' && !['draft', 'planned', 'ready', 'in_progress', 'awaiting_input', 'changes_requested'].includes(t.status)) continue;
+    if (['draft', 'planned', 'ready', 'in_progress', 'awaiting_input', 'changes_requested'].includes(t.status)) {
+      // SupersedeTask is a system transition; this command applies it on the CEO's authority.
+      const r = await transitionTask({ ...c, principal: { type: 'system', id: 'system' } }, t.id, 'SupersedeTask', {}, { reason: `requirement ${i.key} changed to v${version}: ${i.reason}` });
+      if (r.to === 'superseded') superseded.push(t.id);
+      await c.q.query(`UPDATE runs SET status = 'cancelled', ended_at = $2 WHERE task_id = $1 AND status = 'running'`, [t.id, c.now.toISOString()]);
+    } else {
+      // Submitted / verifying / in review / awaiting acceptance: verified against the old version, so it is withdrawn.
+      const r = await transitionTask(c, t.id, 'CancelTask', {}, { reason: `withdrawn: requirement ${i.key} changed to v${version}: ${i.reason}` });
+      await c.q.query(`UPDATE submissions SET status = 'superseded' WHERE task_id = $1 AND status = 'open'`, [t.id]);
+      if (r.to === 'cancelled') superseded.push(t.id);
+    }
+  }
+
+  // A re-plan task for the changed requirement, owned by the department head.
+  const head = (await c.q.query<{ id: string; tool_grants: string[] }>('SELECT id, tool_grants FROM employees WHERE id = $1', [obj.owner_employee_id])).rows[0]!;
+  const mode = effectiveMode(...(await modesFor(c.q, obj.id)));
+  const needsApproval = planApprovalRequired(mode, obj.risk_floor);
+  const planningTaskId = newId('tsk');
+  const remaining = Number(obj.budget_limit) - Number(obj.budget_spent) - Number(obj.budget_reserved);
+  if (remaining <= 0) throw new DomainError('budget_exhausted', 'The objective has no budget left for re-planning; raise the budget first');
+  await c.q.query(`INSERT INTO tasks (id, objective_id, depth, kind, title, spec, status, risk_tier, owner_employee_id, created_by_type, created_by, max_attempts, budget_limit, tool_grants)
+                   VALUES ($1,$2,0,'planning',$3,$4,'draft',$5,$6,$7,$8,3,$9,$10)`,
+    [planningTaskId, obj.id, `Re-plan: ${i.key} v${version}`,
+      `Requirement ${i.key} changed (v${version}). Propose tasks that deliver the new version. Accepted work built against earlier versions stays accepted; reuse or extend it rather than redoing it.`,
+      obj.risk_floor, head.id, c.principal.type, c.principal.id, Math.min(remaining, 10), JSON.stringify(head.tool_grants)]);
+  await c.q.query('INSERT INTO task_requirement_refs (task_id, requirement_id, requirement_version) VALUES ($1,$2,$3)', [planningTaskId, req.id, version]);
+  await createCriteriaSet(c, planningTaskId, [
+    { kind: 'deterministic', statement: 'The plan passes structural validation and covers the changed requirement', independence: 'platform', check: { type: 'plan_validation' } },
+    ...(needsApproval ? [{ kind: 'human_judgment', statement: 'The CEO approves the re-plan', independence: 'human' }] : []),
+  ], true);
+  await c.q.query(`UPDATE tasks SET status = 'planned', criteria_frozen_at = $2 WHERE id = $1`, [planningTaskId, c.now.toISOString()]);
+  if (obj.status === 'completed') await c.q.query(`UPDATE objectives SET status = 'active', version = version + 1 WHERE id = $1`, [obj.id]);
+
+  c.emit({ type: 'requirement.changed', aggregateType: 'objective', aggregateId: obj.id,
+    payload: { key: i.key, version, reason: i.reason, superseded, kept_accepted: keptAccepted, replan_task: planningTaskId } });
+  c.emit({ type: 'task.created', aggregateType: 'task', aggregateId: planningTaskId, payload: { objective_id: obj.id, kind: 'planning', status: 'planned', replan_for: i.key } });
+  return { requirementId: req.id, version, superseded, keptAccepted, planningTaskId };
 };

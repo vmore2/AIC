@@ -2,7 +2,7 @@
 import path from 'node:path';
 import type { Config } from './config/config.js';
 import { GitHubCodeHost, LocalCodeHost, Workspaces, type CodeHost } from './execution/codeHost.js';
-import { LocalProcessSandbox } from './execution/sandbox.js';
+import { DockerSandbox, LocalProcessSandbox, type SandboxPort } from './execution/sandbox.js';
 import { Ledger } from './ledger/ledger.js';
 import { Orchestrator } from './orchestrator/orchestrator.js';
 import { CredentialIssuer } from './runtime/credentials.js';
@@ -16,6 +16,7 @@ export interface App {
   gateway: ToolGateway;
   workspaces: Workspaces;
   models: ModelFactory;
+  sandbox: SandboxPort;
   close(): Promise<void>;
 }
 
@@ -29,13 +30,13 @@ export async function createApp(config: Config, opts: { log?: (m: string) => voi
     : new GitHubCodeHost(config.code_hosting.repo, config.code_hosting.token_env, config.code_hosting.base_branch);
   await host.ensure();
   const workspaces = new Workspaces(host, path.join(config.storage_path, 'workspaces'));
-  const sandbox = new LocalProcessSandbox(config.sandbox.allow_unisolated_local);
+  const sandbox: SandboxPort = config.sandbox.kind === 'docker' ? new DockerSandbox(config.sandbox.docker) : new LocalProcessSandbox(config.sandbox.allow_unisolated_local);
   const issuer = CredentialIssuer.fromEnvOrFile(config.credential_secret_env, config.storage_path);
   const gateway = new ToolGateway(ledger, issuer, workspaces, sandbox);
   const models = ModelFactory.fromConfig(config);
   const orchestrator = new Orchestrator({ ledger, gateway, workspaces, sandbox, models, issuer, storageDir: config.storage_path, log: opts.log });
   return {
-    config, ledger, orchestrator, gateway, workspaces, models,
+    config, ledger, orchestrator, gateway, workspaces, models, sandbox,
     close: async () => { await orchestrator.stop(); await ledger.close(); },
   };
 }

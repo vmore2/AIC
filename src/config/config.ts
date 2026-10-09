@@ -47,7 +47,17 @@ export const ConfigSchema = z.object({
    * Sandbox for agent-executed commands. Production must use an isolated sandbox (microVM/gVisor).
    * `allow_unisolated_local` permits a plain local subprocess for evaluation on a trusted machine only.
    */
-  sandbox: z.object({ allow_unisolated_local: z.boolean().default(false) }).default({}),
+  sandbox: z.object({
+    kind: z.enum(['local', 'docker']).default('local'),
+    allow_unisolated_local: z.boolean().default(false),
+    docker: z.object({
+      image: z.string().default('node:22-bookworm-slim'),
+      memory: z.string().default('2g'),
+      cpus: z.number().positive().default(2),
+      pids: z.number().int().positive().default(512),
+      network: z.enum(['none', 'bridge']).default('none'),
+    }).default({}),
+  }).default({}),
   /** Where run workspaces and transcripts are stored (customer storage). */
   storage_path: z.string().default('.aic/storage'),
   /** The company's own custom teams (recommended teams ship with the platform). */
@@ -125,8 +135,13 @@ defaults:
   project_settings:
     test_command: node --test
 
-# WARNING: local evaluation only. Agent-run commands execute as normal processes on this
-# machine (scrubbed environment, timeouts) but are NOT isolated. Use an isolated sandbox in production.
+# Where agent-run commands (tests, builds) execute.
+#   kind: docker  → each command in a locked-down container on YOUR Docker (no network, no
+#                   capabilities, read-only root, resource limits). Recommended.
+#   kind: local   → plain local processes. NOT isolated; evaluation on a trusted machine only.
 sandbox:
+  kind: local
   allow_unisolated_local: true
+  # kind: docker
+  # docker: { image: node:22-bookworm-slim, memory: 2g, cpus: 2, network: none }
 `;

@@ -65,10 +65,12 @@ export class Workspaces {
   integrationBranch(objectiveId: string) { return `aic/${objectiveId}/integration`; }
 
   async refExists(ref: string): Promise<boolean> {
+    mkdirSync(this.root, { recursive: true });
     try { await git(this.root, ['ls-remote', '--exit-code', this.host.remote(), ref]); return true; } catch { return false; }
   }
 
   async remoteSha(ref: string): Promise<string | null> {
+    mkdirSync(this.root, { recursive: true });
     try {
       const out = await git(this.root, ['ls-remote', this.host.remote(), ref]);
       return out.split(/\s+/)[0] || null;

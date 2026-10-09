@@ -120,8 +120,8 @@ const BUILTINS: Record<string, BuiltinTool> = {
     run: async (env, a: { text: string }, gw) => { await gw.ledger.run('postUpdate', { taskId: env.claims.taskId!, text: a.text }, env.principal); return ok('Posted (shown as a claim, not as status).'); },
   },
   'ledger.propose_directive': {
-    schema: z.object({ type: z.enum(['create_objective', 'decision']), summary: z.string().min(5), payload: z.record(z.unknown()) }),
-    run: async (env, a: { type: 'create_objective' | 'decision'; summary: string; payload: Record<string, unknown> }, gw) => {
+    schema: z.object({ type: z.enum(['create_objective', 'decision', 'change_requirement']), summary: z.string().min(5), payload: z.record(z.unknown()) }),
+    run: async (env, a: { type: 'create_objective' | 'decision' | 'change_requirement'; summary: string; payload: Record<string, unknown> }, gw) => {
       try {
         const r = await gw.ledger.run('proposeDirective', { type: a.type, summary: a.summary, payload: a.payload }, env.principal);
         return ok({ directive_id: r.directiveId, status: 'pending_confirmation', message: 'Proposal recorded. Nothing changes until the CEO confirms it.' });
@@ -238,7 +238,7 @@ const PARAMS: Record<string, Record<string, unknown>> = {
   'ledger.raise_blocker': { type: 'object', properties: { type: { type: 'string', enum: ['blocker', 'decision_required'] }, question: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, summary: { type: 'string' }, consequences: { type: 'string' } } } }, recommendation: { type: 'string' } }, required: ['question'] },
   'ledger.ask_question': { type: 'object', properties: { question: { type: 'string' }, blocking: { type: 'boolean' } }, required: ['question'] },
   'ledger.post_update': { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
-  'ledger.propose_directive': { type: 'object', properties: { type: { type: 'string', enum: ['create_objective', 'decision'] }, summary: { type: 'string' }, payload: { type: 'object', description: 'create_objective: {title, requirements:[{key:"REQ-1",text}], budget_usd}; decision: {question, decision, objective_id}' } }, required: ['type', 'summary', 'payload'] },
+  'ledger.propose_directive': { type: 'object', properties: { type: { type: 'string', enum: ['create_objective', 'decision', 'change_requirement'] }, summary: { type: 'string' }, payload: { type: 'object', description: 'create_objective: {title, requirements:[{key:"REQ-1",text}], budget_usd}; decision: {question, decision, objective_id}; change_requirement: {objective_id, key:"REQ-2", text, reason}' } }, required: ['type', 'summary', 'payload'] },
   'review.record_verdict': { type: 'object', properties: { verdicts: { type: 'array', items: { type: 'object', properties: { criterion_id: { type: 'string' }, verdict: { type: 'string', enum: ['pass', 'fail', 'inconclusive'] }, confidence: { type: 'number' }, findings: { type: 'array', items: { type: 'object', properties: { location: { type: 'string' }, description: { type: 'string' }, severity: { type: 'string' } }, required: ['location', 'description'] } } }, required: ['criterion_id', 'verdict'] } } }, required: ['verdicts'] },
   'knowledge.search': { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } }, required: ['query'] },
   'knowledge.remember': { type: 'object', properties: { kind: { type: 'string', enum: ['lesson', 'convention', 'preference', 'howto', 'warning'] }, body: { type: 'string' } }, required: ['kind', 'body'] },

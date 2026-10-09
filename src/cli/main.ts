@@ -76,6 +76,9 @@ ${c.b('Objectives and plans')}
   aic proposal <id>                                a lead's plan: tasks, owners, criteria, coverage
   aic approve <proposal> [-m "…"] | aic changes <proposal> -m "…"
 
+${c.b('Change course')}
+  aic requirement <objective> <REQ-n> "new text" -m "why"   change or add a requirement; the lead re-plans
+
 ${c.b('Oversight')}
   aic status                                       objectives: verified vs claimed progress
   aic task <id>                                    claim vs evidence, runs, timeline
@@ -85,6 +88,9 @@ ${c.b('Oversight')}
   aic mode <M1..M6> [--department key] -m "why"    operating mode
   aic stop -m "why" | aic resume [--mode M4] [--ack]   emergency stop / resume
   aic audit                                        verify the tamper-evident ledger
+
+${c.b('Operate')}
+  aic doctor                                       readiness checks for your infrastructure
 
 ${c.b('Serve')}
   aic serve [--port 4100]                          dashboard + API + orchestrator
@@ -196,6 +202,25 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
       const settings = Object.fromEntries([...Object.entries(config.defaults.project_settings), ...(multi['set'] ?? []).map((s) => s.split('=', 2) as [string, string])]);
       const r = await ledger.run('createObjective', { title: String(flags['title'] ?? ''), departmentKey: pos[1] ?? '', requirements: reqs, budgetUsd: Number(flags['budget'] ?? 50), settings }, await ceo(app));
       console.log(`${c.g('✔')} Objective ${r.objectiveId} created. The department head will propose a plan${r.planApprovalRequired ? ' for your approval' : ''}. Run ${c.cy('aic run')}.`);
+      return;
+    }
+    case 'requirement': {
+      const [objectiveId, key] = [pos[1], pos[2]];
+      const text = pos.slice(3).join(' ');
+      if (!objectiveId || !key || !text) throw new Error('Usage: aic requirement <objective> <REQ-n> "new text" -m "why"');
+      const r = await ledger.run('changeRequirement', { objectiveId, key, text, reason: msg ?? 'changed by CEO' }, await ceo(app));
+      console.log(`${c.g('✔')} ${key} is now v${r.version}. Superseded ${r.superseded.length} unaccepted task(s); ${r.keptAccepted.length} accepted task(s) stay accepted against the earlier version.`);
+      console.log(`The lead will re-plan the change. Run ${c.cy('aic run')}, then check ${c.cy('aic inbox')}.`);
+      return;
+    }
+    case 'doctor': {
+      const { runDoctor } = await import('../ops/doctor.js');
+      const results = await runDoctor(app);
+      for (const r of results) console.log(`${r.level === 'pass' ? c.g('✔') : r.level === 'warn' ? c.y('!') : c.r('✖')} ${r.check.padEnd(28)} ${r.detail}${r.fix ? c.dim(`\n    → ${r.fix}`) : ''}`);
+      const fails = results.filter((r) => r.level === 'fail').length;
+      const warns = results.filter((r) => r.level === 'warn').length;
+      console.log(`\n${fails ? c.r(`${fails} blocking issue(s)`) : warns ? c.y(`Ready for evaluation; ${warns} item(s) to address before production`) : c.g('Production checklist passed')}`);
+      process.exitCode = fails ? 1 : 0;
       return;
     }
     case 'run': {
