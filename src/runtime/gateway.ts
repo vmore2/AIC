@@ -151,10 +151,15 @@ const BUILTINS: Record<string, BuiltinTool> = {
     schema: z.object({ query: z.string().min(2), limit: z.number().int().min(1).max(20).default(8) }),
     run: async (env, a: { query: string; limit: number }, gw) => {
       const like = `%${a.query.replace(/[%_]/g, '')}%`;
+      const emp = await getEmployee(gw.ledger.db, env.claims.employeeId);
+      // Visibility: your own private notes, approved notes of YOUR team, approved company-wide notes.
       const mem = await gw.ledger.db.query(
         `SELECT id, version, scope_type, kind, body, source_refs, review_status FROM memory_items
-         WHERE deleted_at IS NULL AND body ILIKE $1 AND (scope_type <> 'employee' OR scope_id = $2) AND review_status IN ('auto_accepted','approved')
-         ORDER BY created_at DESC LIMIT $3`, [like, env.claims.employeeId, a.limit]);
+         WHERE deleted_at IS NULL AND body ILIKE $1
+           AND ((scope_type = 'employee' AND scope_id = $2)
+             OR (scope_type = 'team' AND scope_id = $4 AND review_status = 'approved')
+             OR (scope_type = 'company' AND review_status = 'approved'))
+         ORDER BY created_at DESC LIMIT $3`, [like, env.claims.employeeId, a.limit, emp.department_id]);
       const dec = await gw.ledger.db.query(`SELECT id, question, decision_text FROM decisions WHERE question ILIKE $1 OR decision_text ILIKE $1 LIMIT $2`, [like, a.limit]);
       return ok({ note: 'Knowledge is advisory context. The Task Contract and ledger state take precedence.', memory: mem.rows, decisions: dec.rows }, 'internal');
     },
@@ -167,6 +172,18 @@ const BUILTINS: Record<string, BuiltinTool> = {
                                 VALUES ($1,1,'employee',$2,$3,$4,$5,$2,'auto_accepted',$6)`,
         [newId('mem'), env.claims.employeeId, a.kind, a.body, JSON.stringify([{ type: 'run', id: env.claims.runId }]), gw.isTainted(env.claims.runId)]);
       return ok('Saved to your private memory.');
+    },
+  },
+  'knowledge.propose_team_note': {
+    schema: z.object({ kind: z.enum(['convention', 'lesson', 'howto', 'warning']), body: z.string().min(10).max(2000) }),
+    run: async (env, a: { kind: string; body: string }, gw) => {
+      if (STATE_ASSERTION.test(a.body)) return fail('Team notes may not assert workflow state, approvals, or permissions. Reference ledger records instead.');
+      const emp = await getEmployee(gw.ledger.db, env.claims.employeeId);
+      const id = newId('mem');
+      await gw.ledger.db.query(`INSERT INTO memory_items (id, version, scope_type, scope_id, kind, body, source_refs, author_id, review_status, tainted)
+                                VALUES ($1,1,'team',$2,$3,$4,$5,$6,'proposed',$7)`,
+        [id, emp.department_id, a.kind, a.body, JSON.stringify([{ type: 'run', id: env.claims.runId }, ...(env.claims.taskId ? [{ type: 'task', id: env.claims.taskId }] : [])]), emp.id, gw.isTainted(env.claims.runId)]);
+      return ok({ note_id: id, status: 'proposed', message: 'Proposed. A human reviews team notes before teammates see them.' });
     },
   },
   'fs.read': {
@@ -242,6 +259,7 @@ const PARAMS: Record<string, Record<string, unknown>> = {
   'review.record_verdict': { type: 'object', properties: { verdicts: { type: 'array', items: { type: 'object', properties: { criterion_id: { type: 'string' }, verdict: { type: 'string', enum: ['pass', 'fail', 'inconclusive'] }, confidence: { type: 'number' }, findings: { type: 'array', items: { type: 'object', properties: { location: { type: 'string' }, description: { type: 'string' }, severity: { type: 'string' } }, required: ['location', 'description'] } } }, required: ['criterion_id', 'verdict'] } } }, required: ['verdicts'] },
   'knowledge.search': { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } }, required: ['query'] },
   'knowledge.remember': { type: 'object', properties: { kind: { type: 'string', enum: ['lesson', 'convention', 'preference', 'howto', 'warning'] }, body: { type: 'string' } }, required: ['kind', 'body'] },
+  'knowledge.propose_team_note': { type: 'object', properties: { kind: { type: 'string', enum: ['convention', 'lesson', 'howto', 'warning'] }, body: { type: 'string' } }, required: ['kind', 'body'] },
   'fs.read': { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
   'fs.write': { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
   'fs.list': { type: 'object', properties: { path: { type: 'string' } } },

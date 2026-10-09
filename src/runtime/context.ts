@@ -12,6 +12,7 @@ export interface TaskContract {
   acceptance_criteria: { id: string; statement: string; kind: string; required: boolean; verified_by: string; check?: unknown }[];
   constraints: { id: string; text: string; decided_by: string }[];
   prior_attempt_feedback: string[];
+  team_knowledge: { note: string; kind: string; id: string }[];
   budget: { task_limit_usd: number; task_spent_usd: number };
   permissions: string[];
   how_to_finish: string;
@@ -34,6 +35,7 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
      JOIN requirement_versions rv ON rv.requirement_id = tr.requirement_id AND rv.version = tr.requirement_version
      WHERE tr.task_id = $1 ORDER BY r.key`, [taskId]);
   const criteria = task.criteria_set_id ? await getCriteria(q, task.criteria_set_id) : [];
+  const emp = await getEmployee(q, employeeId);
   const decisions = await q.query<{ id: string; question: string; decision_text: string; decided_by: string }>(
     `SELECT id, question, decision_text, decided_by FROM decisions WHERE scope_type = 'objective' AND scope_id = $1 ORDER BY created_at`, [obj.id]);
   const feedback: string[] = [];
@@ -46,8 +48,6 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
   const reopens = await q.query<{ reason: string | null }>(
     `SELECT payload->>'reason' AS reason FROM ledger_events WHERE aggregate_id = $1 AND type = 'task.status_changed' AND payload->>'transition' = 'ReopenTask' ORDER BY seq`, [taskId]);
   for (const r of reopens.rows) feedback.push(`This task was reopened after acceptance: ${r.reason ?? 'no reason recorded'}`);
-  const emp = await getEmployee(q, employeeId);
-
   const contract: TaskContract = {
     task: { id: task.id, kind: task.kind, title: task.title, spec: task.spec, risk_tier: task.risk_tier, attempt: task.attempt, max_attempts: task.max_attempts },
     objective: { id: obj.id, title: obj.title },
@@ -55,6 +55,9 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
     acceptance_criteria: criteria.map((c) => ({ id: c.id, statement: c.statement, kind: c.kind, required: c.required, verified_by: c.independence, ...(c.check_spec ? { check: c.check_spec } : {}) })),
     constraints: decisions.rows.map((d) => ({ id: d.id, text: `${d.question} → ${d.decision_text}`, decided_by: d.decided_by })),
     prior_attempt_feedback: feedback,
+    team_knowledge: (await q.query<{ id: string; kind: string; body: string }>(
+      `SELECT id, kind, body FROM memory_items WHERE scope_type = 'team' AND scope_id = $1 AND review_status = 'approved' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 10`,
+      [emp.department_id])).rows.map((r) => ({ id: r.id, kind: r.kind, note: `${r.body} (advisory team note; the requirements and criteria above take precedence)` })),
     budget: { task_limit_usd: Number(task.budget_limit), task_spent_usd: Number(task.budget_spent) },
     permissions: (task.tool_grants as string[]).filter((t) => emp.tool_grants.includes(t)),
     how_to_finish: task.kind === 'planning'

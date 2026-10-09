@@ -57,6 +57,7 @@ export const COMMANDS = {
   proposeDirective: talk.proposeDirective,
   confirmDirective: talk.confirmDirective,
   rejectDirective: talk.rejectDirective,
+  curateNote: talk.curateNote,
 } as const;
 
 export type CommandName = keyof typeof COMMANDS;

@@ -166,6 +166,8 @@ async function inboxView() {
         extra = `<pre>${esc(JSON.stringify(d.payload, null, 2))}</pre><p><button class="act" onclick="directive('${i.id}','confirm')">Confirm</button> <button class="sec" onclick="directive('${i.id}','decline')">Decline</button></p>`;
       } else if (i.kind === 'escalation') {
         extra = `<p><button class="act" onclick="resolveEsc('${i.id}')">Answer with the note above</button></p>`;
+      } else if (i.kind === 'note') {
+        extra = `<p><button class="act" onclick="curate('${i.id}','approve')">Approve note</button> <button class="sec" onclick="curate('${i.id}','reject')">Reject</button></p>`;
       } else if (i.kind === 'release') {
         extra = `<p><button class="act" onclick="release('${i.id}')">Approve release</button></p>`;
       } else {
@@ -181,6 +183,7 @@ async function decidePlan(id, decision) {
 }
 async function directive(id, what) { await api(`/api/directives/${id}/${what}`, { method: 'POST', body: JSON.stringify({ reason: window.__ask() }) }); refresh(); }
 async function resolveEsc(id) { const answer = window.__ask(); if (!answer) { alertBox('Write your answer in the note box first.'); return; } await api(`/api/escalations/${id}/resolve`, { method: 'POST', body: JSON.stringify({ answer }) }); refresh(); }
+async function curate(id, decision) { await api(`/api/notes/${id}`, { method: 'POST', body: JSON.stringify({ decision, reason: window.__ask() }) }); refresh(); }
 async function release(id) { await api(`/api/objectives/${id}/release`, { method: 'POST', body: '{}' }); refresh(); }
 function alertBox(text) { view.insertAdjacentHTML('afterbegin', `<div class="card warn">${esc(text)}</div>`); }
 

@@ -50,7 +50,7 @@ async function pendingDecisionCount(q: Queryable, objectiveId: string) {
   return Number(r.rows[0]!.n);
 }
 
-export interface InboxItem { kind: 'plan' | 'acceptance' | 'uncertain' | 'failed' | 'escalation' | 'directive' | 'release'; id: string; title: string; detail: string; command: string }
+export interface InboxItem { kind: 'plan' | 'acceptance' | 'uncertain' | 'failed' | 'escalation' | 'directive' | 'release' | 'note'; id: string; title: string; detail: string; command: string }
 
 /** Everything waiting on the CEO, with the exact command that decides it. */
 export async function inbox(q: Queryable): Promise<InboxItem[]> {
@@ -72,6 +72,12 @@ export async function inbox(q: Queryable): Promise<InboxItem[]> {
   const rel = await q.query<{ id: string; title: string }>(
     `SELECT o.id, o.title FROM objectives o WHERE o.status = 'completed' AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.subject_id = o.id AND a.subject_type = 'external_action')`);
   for (const o of rel.rows) items.push({ kind: 'release', id: o.id, title: `Release "${o.title}" to the main branch`, detail: 'All work accepted. Merging to the protected branch needs your approval.', command: `aic release ${o.id}` });
+  const notes = await q.query<{ id: string; kind: string; body: string; tainted: boolean; author: string; team: string }>(
+    `SELECT m.id, m.kind, m.body, m.tainted, e.display_name AS author, d.name AS team FROM memory_items m
+     JOIN employees e ON e.id = m.author_id JOIN departments d ON d.id = m.scope_id
+     WHERE m.scope_type = 'team' AND m.review_status = 'proposed' AND m.deleted_at IS NULL ORDER BY m.created_at`);
+  for (const n of notes.rows) items.push({ kind: 'note', id: n.id, title: `Team note for ${n.team} (${n.kind}) from ${n.author}`,
+    detail: `${n.body}${n.tainted ? '\n⚠ Written during a run that read untrusted external content — check it for injected instructions.' : ''}`, command: `aic notes approve ${n.id}` });
   return items;
 }
 

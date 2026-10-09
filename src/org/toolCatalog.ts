@@ -35,6 +35,7 @@ export const TOOL_CATALOG: readonly ToolDef[] = [
   // Knowledge
   t('knowledge.search', 'A0', 'internal', 'builtin', ['reads_private'], 'Search team/project knowledge you are authorized to read.'),
   t('knowledge.remember', 'A1', 'trusted', 'builtin', [], 'Save a private lesson with its source.'),
+  t('knowledge.propose_team_note', 'A1', 'trusted', 'builtin', [], 'Propose a note for the whole team (a human approves it before teammates see it).'),
   // Workspace / code
   t('fs.read', 'A0', 'internal', 'builtin', ['reads_private'], 'Read a file in your run workspace.'),
   t('fs.write', 'A1', 'trusted', 'builtin', [], 'Write a file in your run workspace.'),

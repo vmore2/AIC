@@ -27,7 +27,7 @@ roles:
     capabilities_required: { structured_output: true, tool_calling: true, min_context_tokens: 128000 }
     tools: [ledger.get_task_contract, ledger.get_team_board, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
             ledger.ask_question, ledger.raise_blocker, ledger.submit_work, ledger.post_update, ledger.propose_directive,
-            knowledge.search, knowledge.remember, fs.read, fs.write, fs.list, sandbox.exec, repo.commit_and_push]
+            knowledge.search, knowledge.remember, knowledge.propose_team_note, fs.read, fs.write, fs.list, sandbox.exec, repo.commit_and_push]
     denied_tools: [repo.merge_pr, deploy.request]
     task_kinds: [planning, integration, decision, discovery]
     can_manage: true
@@ -58,7 +58,7 @@ roles:
       - Raise a blocker instead of guessing when requirements are ambiguous
     capabilities_required: { structured_output: true, tool_calling: true, min_context_tokens: 128000 }
     tools: [ledger.get_task_contract, ledger.submit_work, ledger.raise_blocker, ledger.ask_question, ledger.post_update,
-            knowledge.search, knowledge.remember, fs.read, fs.write, fs.list, sandbox.exec, repo.commit_and_push]
+            knowledge.search, knowledge.remember, knowledge.propose_team_note, fs.read, fs.write, fs.list, sandbox.exec, repo.commit_and_push]
     denied_tools: [repo.merge_pr, deploy.request, email.send_external]
     task_kinds: [implementation, remediation]
     rule_of_two_profile: builder

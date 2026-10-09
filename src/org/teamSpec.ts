@@ -83,8 +83,8 @@ export const isTeamSpec = (raw: unknown): boolean => !!raw && typeof raw === 'ob
 export const keyOf = (title: string) => title.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').replace(/^(\d)/, 'r_$1');
 
 const BASE = ['ledger.get_task_contract', 'ledger.raise_blocker', 'ledger.ask_question', 'knowledge.search'];
-const PRODUCER = ['ledger.submit_work', 'ledger.post_update', 'knowledge.remember', 'fs.read', 'fs.write', 'fs.list'];
-const MANAGER = ['ledger.get_team_board', 'ledger.propose_plan', 'ledger.create_subtask', 'ledger.assign_task', 'ledger.post_update', 'ledger.propose_directive', 'ledger.submit_work', 'fs.read', 'fs.write', 'fs.list'];
+const PRODUCER = ['ledger.submit_work', 'ledger.post_update', 'knowledge.remember', 'knowledge.propose_team_note', 'fs.read', 'fs.write', 'fs.list'];
+const MANAGER = ['knowledge.propose_team_note', 'ledger.get_team_board', 'ledger.propose_plan', 'ledger.create_subtask', 'ledger.assign_task', 'ledger.post_update', 'ledger.propose_directive', 'ledger.submit_work', 'fs.read', 'fs.write', 'fs.list'];
 const REVIEWER = ['ledger.get_task_contract', 'review.record_verdict', 'fs.read', 'fs.list', 'knowledge.search'];
 const EXTERNAL_ACTION_TOOLS = new Set(['email.send_external', 'social.publish', 'support.reply_customer', 'calendar.schedule', 'crm.update', 'ticket.create']);
 

@@ -89,6 +89,7 @@ ${c.b('Oversight')}
   aic mode <M1..M6> [--department key] -m "why"    operating mode
   aic stop -m "why" | aic resume [--mode M4] [--ack]   emergency stop / resume
   aic audit                                        verify the tamper-evident ledger
+  aic notes [approve|reject <id>]                  team knowledge proposed by employees
 
 ${c.b('People')}
   aic users                                        people with access
@@ -183,6 +184,23 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
       console.log(`\n${c.b(emp.display_name)}: ${turn.reply}\n`);
       for (const d of turn.directives) console.log(`${c.y('◆ proposal awaiting your confirmation')} ${d.summary}\n   review: ${c.cy(`aic directive ${d.id}`)}   confirm: ${c.cy(`aic confirm ${d.id}`)}`);
       return;
+    }
+    case 'notes': {
+      const sub = pos[1] ?? 'list';
+      if (sub === 'list') {
+        const rows = (await db.query<{ id: string; kind: string; body: string; review_status: string; team: string; tainted: boolean }>(
+          `SELECT m.id, m.kind, m.body, m.review_status, d.name AS team, m.tainted FROM memory_items m JOIN departments d ON d.id = m.scope_id
+           WHERE m.scope_type = 'team' AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 50`)).rows;
+        if (!rows.length) { console.log('No team notes yet.'); return; }
+        for (const n of rows) console.log(`${n.review_status === 'approved' ? c.g('approved') : n.review_status === 'proposed' ? c.y('proposed') : c.dim(n.review_status)} ${c.b(n.team)} ${c.dim(n.kind)} ${n.body}${n.tainted ? c.r(' [from a run that read untrusted content]') : ''} ${c.dim(n.id)}`);
+        return;
+      }
+      if (sub === 'approve' || sub === 'reject') {
+        const r = await ledger.run('curateNote', { noteId: pos[2] ?? '', decision: sub, reason: msg }, await ceo(app));
+        console.log(`${c.g('✔')} Note ${r.status}.`);
+        return;
+      }
+      throw new Error('Usage: aic notes [list | approve <id> | reject <id> -m "why"]');
     }
     case 'directive': {
       const d = (await db.query<{ id: string; directive_type: string; payload: unknown; payload_sha256: string; status: string }>('SELECT * FROM directives WHERE id = $1', [pos[1]])).rows[0];

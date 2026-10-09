@@ -118,3 +118,16 @@ export const rejectDirective: Handler<{ directiveId: string; reason: string }, {
   c.emit({ type: 'directive.rejected', aggregateType: 'directive', aggregateId: i.directiveId, payload: { reason: i.reason } });
   return { status: 'rejected' };
 };
+
+/** A human approves or rejects a proposed team note (architecture.md §10.4). Notes are advisory context, never authority. */
+export const curateNote: Handler<{ noteId: string; decision: 'approve' | 'reject'; reason?: string }, { status: string }> = async (c, i) => {
+  await c.authorize('memory.curate', { type: 'MemoryItem', id: i.noteId }, {});
+  const n = (await c.q.query<{ id: string; status: string; scope_id: string; tainted: boolean }>(
+    `SELECT id, review_status AS status, scope_id, tainted FROM memory_items WHERE id = $1 AND version = 1 FOR UPDATE`, [i.noteId])).rows[0];
+  if (!n) throw new DomainError('not_found', 'Note not found');
+  if (n.status !== 'proposed') throw new DomainError('conflict', `Note is ${n.status}`);
+  const status = i.decision === 'approve' ? 'approved' : 'rejected';
+  await c.q.query('UPDATE memory_items SET review_status = $2 WHERE id = $1', [i.noteId, status]);
+  c.emit({ type: 'memory.curated', aggregateType: 'memory_item', aggregateId: i.noteId, payload: { decision: status, team: n.scope_id, tainted: n.tainted, reason: i.reason ?? null } });
+  return { status };
+};

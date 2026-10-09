@@ -101,6 +101,8 @@ export function buildServer(app: App, token: string) {
     const r = await app.ledger.run('recordCiResult', { sha: b.sha, status: b.status, name: b.name, url: b.url, branch: b.branch }, SYSTEM, `ci:${b.delivery_id ?? `${b.sha}:${b.name}:${b.status}`}`);
     return r;
   });
+  server.post<{ Params: { id: string }; Body: { decision: 'approve' | 'reject'; reason?: string } }>('/api/notes/:id', async (req) =>
+    app.ledger.run('curateNote', { noteId: req.params.id, decision: req.body.decision, reason: req.body.reason }, await who(req), key(req)));
   server.get('/api/me', async (req) => {
     const p = await who(req);
     const u = (await db.query<{ name: string; role: string }>('SELECT name, role FROM users WHERE id = $1', [p.id])).rows[0];

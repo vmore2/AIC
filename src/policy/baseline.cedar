@@ -11,7 +11,7 @@ when { principal.role == "ceo" || principal.role == "admin" };
 
 // Human approvers decide approvals and accept/reject work.
 permit (principal is User, action in [Action::"approval.decide", Action::"task.accept", Action::"task.reject",
-        Action::"task.accept_uncertain", Action::"escalation.resolve", Action::"directive.confirm"], resource)
+        Action::"task.accept_uncertain", Action::"escalation.resolve", Action::"directive.confirm", Action::"memory.curate"], resource)
 when { principal.role == "approver" };
 
 // The workflow driver performs system transitions on ledger facts.
