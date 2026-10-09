@@ -211,6 +211,7 @@ CREATE TABLE runs (
   workspace_path  text,
   branch          text,
   review_of_submission_id text,
+  conversation_id text,
   started_at      timestamptz NOT NULL DEFAULT now(),
   ended_at        timestamptz
 );

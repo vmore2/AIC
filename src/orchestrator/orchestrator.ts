@@ -322,6 +322,37 @@ export class Orchestrator {
     this.active.set(runId, p);
   }
 
+  // ------------------------------------------------------------------ conversations
+
+  /** Run one conversational turn for a CEO message; returns the reply and any proposals awaiting confirmation. */
+  async converse(runId: string): Promise<{ reply: string; directives: { id: string; type: string; summary: string; payloadSha256: string }[] }> {
+    const q = this.d.ledger.db;
+    const run = await getRun(q, runId);
+    const emp = await getEmployee(q, run.employee_id);
+    const dept = (await q.query<{ key: string; name: string }>('SELECT key, name FROM departments WHERE id = $1', [emp.department_id])).rows[0]!;
+    const history = (await q.query<{ author_type: string; body: string }>(
+      'SELECT author_type, body FROM messages WHERE conversation_id = $1 ORDER BY seq DESC LIMIT 12', [run.conversation_id])).rows.reverse();
+    const latest = history.filter((m) => m.author_type === 'user').at(-1)?.body ?? '';
+    const first = `CONVERSATION WITH THE CEO. Ledger state is available through your tools; to change work, propose a directive for the CEO to confirm.
+${JSON.stringify({
+      you: { name: emp.display_name, role: emp.role_snapshot.title, department: dept.name }, history, ceo_message: latest }, null, 2)}`;
+    const claims = { runId, employeeId: emp.id, taskId: null, epoch: 0, mode: 'conversation' as const };
+    const model = this.d.models.create(emp.model_profile, { roleKey: emp.role_key, category: emp.category, mode: 'conversation' });
+    const system = `You are ${emp.display_name}, ${emp.role_snapshot.title}.
+Charter: ${emp.role_snapshot.charter}
+${emp.role_snapshot.prompt}
+${PLATFORM_RULES}
+- In conversation you cannot change work directly. When the CEO asks for new work, draft it as a create_objective directive with clear, testable requirements, and ask the CEO to confirm.`;
+    const res = await runAgent({ ledger: this.d.ledger, gateway: this.d.gateway, model, token: this.d.issuer.issue(claims), claims: { ...claims, exp: 0 }, system,
+      firstMessage: first, maxSteps: 8, transcriptDir: path.join(this.d.storageDir, 'transcripts') });
+    const reply = res.finalText?.trim() || '(no reply)';
+    await this.cmd('recordReply', { runId, body: reply }, `reply:${runId}`);
+    await this.cmd('endRun', { runId, outcome: res.outcome === 'completed' ? 'completed' : 'failed', reason: res.reason }, `end:${runId}`);
+    const dirs = await q.query<{ id: string; directive_type: string; payload: { summary: string }; payload_sha256: string }>(
+      `SELECT id, directive_type, payload, payload_sha256 FROM directives WHERE conversation_id = $1 AND status = 'pending_confirmation' ORDER BY created_at`, [run.conversation_id]);
+    return { reply, directives: dirs.rows.map((d) => ({ id: d.id, type: d.directive_type, summary: d.payload.summary, payloadSha256: d.payload_sha256 })) };
+  }
+
   // ------------------------------------------------------------------ drift repair (watchdog)
 
   async repair(): Promise<number> {

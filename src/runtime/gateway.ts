@@ -114,6 +114,18 @@ const BUILTINS: Record<string, BuiltinTool> = {
     schema: z.object({ text: z.string().min(1).max(2000) }),
     run: async (env, a: { text: string }, gw) => { await gw.ledger.run('postUpdate', { taskId: env.claims.taskId!, text: a.text }, env.principal); return ok('Posted (shown as a claim, not as status).'); },
   },
+  'ledger.propose_directive': {
+    schema: z.object({ type: z.enum(['create_objective', 'decision']), summary: z.string().min(5), payload: z.record(z.unknown()) }),
+    run: async (env, a: { type: 'create_objective' | 'decision'; summary: string; payload: Record<string, unknown> }, gw) => {
+      try {
+        const r = await gw.ledger.run('proposeDirective', { type: a.type, summary: a.summary, payload: a.payload }, env.principal);
+        return ok({ directive_id: r.directiveId, status: 'pending_confirmation', message: 'Proposal recorded. Nothing changes until the CEO confirms it.' });
+      } catch (e) {
+        if (e instanceof DomainError && e.code === 'validation') return fail(e.message);
+        throw e;
+      }
+    },
+  },
   'review.record_verdict': {
     schema: z.object({ verdicts: z.array(z.object({
       criterion_id: z.string(), verdict: z.enum(['pass', 'fail', 'inconclusive']), confidence: z.number().min(0).max(1).optional(),
@@ -221,6 +233,7 @@ const PARAMS: Record<string, Record<string, unknown>> = {
   'ledger.raise_blocker': { type: 'object', properties: { type: { type: 'string', enum: ['blocker', 'decision_required'] }, question: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, summary: { type: 'string' }, consequences: { type: 'string' } } } }, recommendation: { type: 'string' } }, required: ['question'] },
   'ledger.ask_question': { type: 'object', properties: { question: { type: 'string' }, blocking: { type: 'boolean' } }, required: ['question'] },
   'ledger.post_update': { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+  'ledger.propose_directive': { type: 'object', properties: { type: { type: 'string', enum: ['create_objective', 'decision'] }, summary: { type: 'string' }, payload: { type: 'object', description: 'create_objective: {title, requirements:[{key:"REQ-1",text}], budget_usd}; decision: {question, decision, objective_id}' } }, required: ['type', 'summary', 'payload'] },
   'review.record_verdict': { type: 'object', properties: { verdicts: { type: 'array', items: { type: 'object', properties: { criterion_id: { type: 'string' }, verdict: { type: 'string', enum: ['pass', 'fail', 'inconclusive'] }, confidence: { type: 'number' }, findings: { type: 'array', items: { type: 'object', properties: { location: { type: 'string' }, description: { type: 'string' }, severity: { type: 'string' } }, required: ['location', 'description'] } } }, required: ['criterion_id', 'verdict'] } } }, required: ['verdicts'] },
   'knowledge.search': { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } }, required: ['query'] },
   'knowledge.remember': { type: 'object', properties: { kind: { type: 'string', enum: ['lesson', 'convention', 'preference', 'howto', 'warning'] }, body: { type: 'string' } }, required: ['kind', 'body'] },
@@ -259,7 +272,7 @@ export class ToolGateway {
   private async grantedTools(claims: RunClaims): Promise<string[]> {
     const emp = await getEmployee(this.ledger.db, claims.employeeId);
     if (claims.mode === 'review') return emp.tool_grants.filter((t) => ['review.record_verdict', 'fs.read', 'fs.list', 'knowledge.search', 'ledger.get_task_contract'].includes(t));
-    if (claims.mode === 'conversation') return emp.tool_grants.filter((t) => ['ledger.get_team_board', 'knowledge.search'].includes(t));
+    if (claims.mode === 'conversation') return emp.tool_grants.filter((t) => ['ledger.get_team_board', 'knowledge.search', 'ledger.propose_directive'].includes(t));
     const task = await getTask(this.ledger.db, claims.taskId!);
     const taskGrants = new Set(task.tool_grants);
     const tools = emp.tool_grants.filter((t) => taskGrants.has(t));

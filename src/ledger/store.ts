@@ -32,7 +32,7 @@ export interface LeaseRow { task_id: string; epoch: number; run_id: string | nul
 export interface RunRow {
   id: string; task_id: string | null; attempt: number; lease_epoch: number; employee_id: string; mode: 'task' | 'review' | 'conversation';
   model_profile: string; model_family: string; status: string; failure_reason: string | null; steps: number; cost_usd: string; budget_reserved: string;
-  workspace_path: string | null; branch: string | null; transcript_path: string | null; review_of_submission_id: string | null;
+  workspace_path: string | null; branch: string | null; transcript_path: string | null; review_of_submission_id: string | null; conversation_id: string | null;
   started_at: string; ended_at: string | null;
 }
 

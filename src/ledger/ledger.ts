@@ -9,6 +9,7 @@ import * as org from './commands/org.js';
 import * as work from './commands/work.js';
 import * as ver from './commands/verification.js';
 import * as gov from './commands/governance.js';
+import * as talk from './commands/interaction.js';
 
 export const COMMANDS = {
   bootstrapCompany: org.bootstrapCompany,
@@ -45,6 +46,12 @@ export const COMMANDS = {
   resumeScope: gov.resumeScope,
   recordActionIntent: gov.recordActionIntent,
   recordActionOutcome: gov.recordActionOutcome,
+  startConversation: talk.startConversation,
+  postMessage: talk.postMessage,
+  recordReply: talk.recordReply,
+  proposeDirective: talk.proposeDirective,
+  confirmDirective: talk.confirmDirective,
+  rejectDirective: talk.rejectDirective,
 } as const;
 
 export type CommandName = keyof typeof COMMANDS;

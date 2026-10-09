@@ -150,14 +150,34 @@ function review(messages: ChatMessage[]): ModelResponse {
 
 // ---------------------------------------------------------------- conversations with the CEO
 
+const REQUEST = /\b(build|create|need|want|add|make|implement|write|launch|prepare|research|draft)\b/i;
+
 function converse(messages: ChatMessage[], tools: string[]): ModelResponse {
+  const ctx = firstJson<{ ceo_message: string; you: { department: string } }>(messages);
   const results = toolResults(messages);
+  const canPropose = tools.includes(toProviderName('ledger.propose_directive'));
+  const proposed = results.find((r) => r.name.endsWith('propose_directive'));
+  if (REQUEST.test(ctx.ceo_message) && canPropose && !proposed) {
+    const title = ctx.ceo_message.replace(/\s+/g, ' ').trim().slice(0, 70);
+    return reply([call('ledger.propose_directive', {
+      type: 'create_objective', summary: `New objective: ${title}`,
+      payload: { title, requirements: [{ key: 'REQ-1', text: ctx.ceo_message.trim() }], budget_usd: 50 },
+    })]);
+  }
+  if (proposed) {
+    let id = '';
+    try { id = JSON.parse(proposed.content).directive_id; } catch { /* ignore */ }
+    return reply([], proposed.content.startsWith('ERROR')
+      ? `I could not draft that as a proposal: ${proposed.content}`
+      : `I've drafted this as a proposal for you to confirm (${id}). I captured your request verbatim as REQ-1 with a $50 budget. ` +
+        `Once you confirm, I'll come back with a detailed plan — tasks, owners, acceptance criteria — for your approval before anyone starts.`);
+  }
   if (!results.length && tools.includes(toProviderName('ledger.get_team_board'))) return reply([call('ledger.get_team_board', {})]);
   let board: { tasks?: { title: string; status: string; owner: string | null }[] } = {};
   try { board = JSON.parse(results.at(-1)?.content ?? '{}'); } catch { /* ignore */ }
   const tasks = board.tasks ?? [];
   const lines = tasks.map((t) => `- ${t.title}: ${t.status}${t.owner ? ` (${t.owner})` : ''}`).join('\n');
   return reply([], tasks.length
-    ? `Here is where my team stands, straight from the ledger:\n${lines}\n\nIf you want new work, create an objective with requirements and I will come back with a plan for your approval.`
-    : 'My team has no active tasks. Give me an objective with your requirements and I will propose a plan for your approval.');
+    ? `Here is where my team stands, straight from the ledger:\n${lines}\n\nTell me what you need next and I will draft it as a proposal for your confirmation.`
+    : 'My team has no active tasks. Tell me what you need and I will draft it as a proposal for your confirmation.');
 }

@@ -27,7 +27,7 @@ export interface AgentRunOptions {
 
 const KEEP_FULL_RESULTS = 6;
 
-export async function runAgent(o: AgentRunOptions): Promise<{ outcome: RunOutcome; reason?: string }> {
+export async function runAgent(o: AgentRunOptions): Promise<{ outcome: RunOutcome; reason?: string; finalText?: string }> {
   const transcript = path.join(o.transcriptDir, `${o.claims.runId}.jsonl`);
   mkdirSync(o.transcriptDir, { recursive: true });
   const log = (entry: unknown) => appendFileSync(transcript, JSON.stringify({ at: new Date().toISOString(), ...(entry as object) }) + '\n');
@@ -68,7 +68,7 @@ export async function runAgent(o: AgentRunOptions): Promise<{ outcome: RunOutcom
     messages.push({ role: 'assistant', content: resp.text, toolCalls: resp.toolCalls });
 
     if (!resp.toolCalls.length) {
-      if (o.claims.mode === 'conversation') return { outcome: 'completed' };
+      if (o.claims.mode === 'conversation') return { outcome: 'completed', finalText: resp.text };
       if (++noToolTurns >= 3) return { outcome: 'ended_without_submission', reason: 'stopped without submitting or escalating' };
       messages.push({ role: 'user', content: 'Reminder: you have not finished. Use your tools, then call the finishing tool from your Task Contract (submit or escalate). Saying you are done does not complete the task.' });
       continue;
