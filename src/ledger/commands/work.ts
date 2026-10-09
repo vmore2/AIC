@@ -641,3 +641,22 @@ export const reassignTask: Handler<{ taskId: string; employeeId: string; reason:
   c.emit({ type: 'task.reassigned', aggregateType: 'task', aggregateId: i.taskId, payload: { from: task.owner_employee_id, to: target.id, reason: i.reason } });
   return { status: (await getTask(c.q, i.taskId)).status, owner: target.display_name };
 };
+
+/**
+ * External CI result (architecture.md §11.5). A failing run on a commit the platform produced or merged
+ * is attributed to the task via the ledger (artifact commits and integration merges) and reopens it.
+ */
+export const recordCiResult: Handler<{ sha: string; status: 'success' | 'failure'; name: string; url?: string; branch?: string }, { attributedTo: string | null; reopened: boolean }> = async (c, i) => {
+  await c.authorize('ci.record', { type: 'Commit', id: i.sha }, {});
+  if (!/^[0-9a-f]{7,64}$/.test(i.sha)) throw new DomainError('validation', 'sha must be a git commit id');
+  const ref = `git:${i.sha}`;
+  const merge = (await c.q.query<{ task_id: string }>(`SELECT task_id FROM external_actions WHERE action = 'merge_integration' AND status = 'succeeded' AND (external_ref = $1 OR external_ref LIKE $2) ORDER BY created_at DESC LIMIT 1`, [ref, `${ref}%`])).rows[0];
+  const produced = merge ? null : (await c.q.query<{ produced_by_task: string }>(`SELECT produced_by_task FROM artifact_versions WHERE external_ref = $1 OR external_ref LIKE $2 ORDER BY created_at DESC LIMIT 1`, [ref, `${ref}%`])).rows[0];
+  const taskId = merge?.task_id ?? produced?.produced_by_task ?? null;
+  c.emit({ type: 'ci.result', aggregateType: 'commit', aggregateId: i.sha, payload: { status: i.status, name: i.name, url: i.url ?? null, branch: i.branch ?? null, attributed_to: taskId } });
+  if (i.status !== 'failure' || !taskId) return { attributedTo: taskId, reopened: false };
+  const task = await getTask(c.q, taskId);
+  if (task.status !== 'accepted') return { attributedTo: taskId, reopened: false };
+  await reopenTask(c, { taskId, reason: `Regression reported by CI "${i.name}" on commit ${i.sha.slice(0, 10)}${i.branch ? ` (${i.branch})` : ''}${i.url ? `: ${i.url}` : ''}` });
+  return { attributedTo: taskId, reopened: true };
+};

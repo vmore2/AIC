@@ -1,7 +1,7 @@
 // Team catalog + team builder API. Custom teams are saved as short team specs in the company's
 // own `teams/` folder (version them in git); recommended teams ship with the platform.
 import { readFileSync } from 'node:fs';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { parse as parseYaml, stringify as toYaml } from 'yaml';
 import type { App } from '../app.js';
 import type { Principal } from '../domain/types.js';
@@ -25,7 +25,7 @@ export function summarize(e: CatalogEntry, hired: Set<string>) {
   };
 }
 
-export function registerTeamRoutes(server: FastifyInstance, app: App, ceo: () => Promise<Principal>) {
+export function registerTeamRoutes(server: FastifyInstance, app: App, who: (req: FastifyRequest) => Promise<Principal>) {
   const db = app.ledger.db;
   const hiredKeys = async () => new Set((await db.query<{ key: string }>('SELECT key FROM departments')).rows.map((r) => r.key));
   const catalog = () => loadCatalog(app.config.teams_path);
@@ -40,6 +40,10 @@ export function registerTeamRoutes(server: FastifyInstance, app: App, ceo: () =>
   });
   server.post<{ Body: { spec: unknown } }>('/api/teams/check', async (req) => summarize(entryFrom(req.body.spec, 'custom', 'draft.yaml'), await hiredKeys()));
   server.post<{ Body: { spec: unknown } }>('/api/teams', async (req) => {
+    // Saving a team definition is governance: only the owner session or admins may do it.
+    const p = await who(req);
+    const role = (await db.query<{ role: string }>('SELECT role FROM users WHERE id = $1', [p.id])).rows[0]?.role;
+    if (!(p.stepUp && (role === 'ceo' || role === 'admin'))) throw new DomainError('forbidden', 'Only the CEO or an admin (owner session) can save team definitions');
     const parsed = TeamSpecSchema.safeParse(req.body.spec);
     if (!parsed.success) throw new DomainError('validation', parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
     const draft = entryFrom(req.body.spec, 'custom', `${parsed.data.team}.yaml`);
@@ -56,6 +60,6 @@ export function registerTeamRoutes(server: FastifyInstance, app: App, ceo: () =>
     if (!e?.department) throw new DomainError('not_found', 'Unknown team');
     if (e.errors.length) throw new DomainError('validation', 'Team has errors', { errors: e.errors });
     const models = Object.fromEntries(e.department.roles.map((r) => [r.key, profileForRole(app.config, r.key)]));
-    return app.ledger.run('hireDepartment', { template: e.department, models }, await ceo());
+    return app.ledger.run('hireDepartment', { template: e.department, models }, await who(req));
   });
 }

@@ -1,4 +1,6 @@
 // Organization commands: company bootstrap, hiring departments, operating modes.
+import { randomBytes } from 'node:crypto';
+import { sha256Hex } from '../../domain/hash.js';
 import { newId } from '../../domain/ids.js';
 import { MODES, type Mode } from '../../domain/types.js';
 import type { ModelProfile } from '../../config/config.js';
@@ -109,4 +111,23 @@ export const setMode: Handler<{ scopeType: 'company' | 'department' | 'objective
     [i.scopeType, i.scopeId, i.mode, c.principal.id, i.reason]);
   c.emit({ type: 'mode.changed', aggregateType: 'scope', aggregateId: `${i.scopeType}:${i.scopeId}`, payload: { from: prev?.mode ?? null, to: i.mode, reason: i.reason } });
   return { mode: i.mode };
+};
+
+/** Issue a personal access token for a teammate. The plaintext is returned once; only its hash is stored. */
+export const issueAccessToken: Handler<{ userId: string; label: string }, { tokenId: string; token: string }> = async (c, i) => {
+  await c.authorize('employee.hire', { type: 'User', id: i.userId }, { action_class: 'A6' });
+  const u = (await c.q.query<{ role: string }>('SELECT role FROM users WHERE id = $1', [i.userId])).rows[0];
+  if (!u) throw new DomainError('not_found', 'User not found');
+  const tokenId = newId('pat');
+  const token = `aic_${randomBytes(24).toString('base64url')}`;
+  await c.q.query('INSERT INTO access_tokens (id, user_id, label, token_sha256, created_by) VALUES ($1,$2,$3,$4,$5)', [tokenId, i.userId, i.label, sha256Hex(token), c.principal.id]);
+  c.emit({ type: 'access_token.issued', aggregateType: 'user', aggregateId: i.userId, payload: { token_id: tokenId, label: i.label, role: u.role } });
+  return { tokenId, token };
+};
+
+export const revokeAccessToken: Handler<{ tokenId: string }, { revoked: boolean }> = async (c, i) => {
+  await c.authorize('employee.hire', { type: 'AccessToken', id: i.tokenId }, { action_class: 'A6' });
+  const r = await c.q.query<{ user_id: string }>('UPDATE access_tokens SET revoked_at = now() WHERE (id = $1 OR user_id = $1) AND revoked_at IS NULL RETURNING user_id', [i.tokenId]);
+  for (const row of r.rows) c.emit({ type: 'access_token.revoked', aggregateType: 'user', aggregateId: row.user_id, payload: { token_id: i.tokenId } });
+  return { revoked: r.rows.length > 0 };
 };

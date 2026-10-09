@@ -1,15 +1,16 @@
 // Local API + CEO dashboard (architecture.md §14–15, MVP subset). Binds to localhost and requires a
 // per-session token. Commands go through the Transition Engine exactly like the CLI; there is no
 // endpoint that sets task status directly (§14.8).
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import type { App } from '../app.js';
-import { type Mode, type Principal } from '../domain/types.js';
+import { SYSTEM, type Mode, type Principal } from '../domain/types.js';
 import { newId } from '../domain/ids.js';
 import { DomainError, verifyChain } from '../ledger/engine.js';
+import { sha256Hex } from '../domain/hash.js';
 import { inbox, objectiveRollups, orgChart, taskDetail } from '../reports/views.js';
 import { registerTeamRoutes } from './teams.js';
 
@@ -18,6 +19,11 @@ const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public')
 export async function startServer(app: App, port = 4100, host = '127.0.0.1') {
   const token = process.env['AIC_DASHBOARD_TOKEN'] ?? randomBytes(18).toString('base64url');
   const server = buildServer(app, token);
+  await app.orchestrator.recoverOrphans();
+  app.orchestrator.start(750);
+  await server.listen({ port, host });
+  console.log(`Dashboard: http://${host}:${port}/#token=${token}`);
+  console.log('This owner token acts as the CEO. Give teammates their own tokens with `aic users add`.');
   return server;
 }
 
@@ -25,20 +31,40 @@ export async function startServer(app: App, port = 4100, host = '127.0.0.1') {
 export function buildServer(app: App, token: string) {
   const server = Fastify({ logger: false });
   const db = app.ledger.db;
+  // Keep the raw JSON body (needed to verify webhook signatures), then parse it ourselves.
+  server.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    (req as FastifyRequest & { rawBody?: string }).rawBody = String(body);
+    try { done(null, body ? JSON.parse(String(body)) : {}); } catch (e) { done(e as Error, undefined); }
+  });
 
-  const ceo = async (): Promise<Principal> => {
-    const u = (await db.query<{ id: string }>(`SELECT id FROM users WHERE role = 'ceo' LIMIT 1`)).rows[0];
-    if (!u) throw new DomainError('not_found', 'Company not initialized');
-    return { type: 'user', id: u.id, stepUp: true };
-  };
-  const authed = (req: FastifyRequest) => {
+  // Who is calling: the owner token (the CEO's own session, step-up) or a personal access token.
+  // Roles are enforced by the policy engine on every command, not by this layer.
+  const principals = new WeakMap<FastifyRequest, Principal>();
+  const resolve = async (req: FastifyRequest): Promise<Principal | null> => {
     const given = String(req.headers['x-aic-token'] ?? '');
-    return given.length === token.length && timingSafeEqual(Buffer.from(given), Buffer.from(token));
+    if (!given) return null;
+    if (given.length === token.length && timingSafeEqual(Buffer.from(given), Buffer.from(token))) {
+      const u = (await db.query<{ id: string }>(`SELECT id FROM users WHERE role = 'ceo' LIMIT 1`)).rows[0];
+      return u ? { type: 'user', id: u.id, stepUp: true } : null;
+    }
+    const t = (await db.query<{ id: string; user_id: string }>(
+      `SELECT a.id, a.user_id FROM access_tokens a JOIN users u ON u.id = a.user_id WHERE a.token_sha256 = $1 AND a.revoked_at IS NULL`, [sha256Hex(given)])).rows[0];
+    if (!t) return null;
+    await db.query('UPDATE access_tokens SET last_used_at = now() WHERE id = $1', [t.id]);
+    return { type: 'user', id: t.user_id, stepUp: false };
+  };
+  const who = async (req: FastifyRequest): Promise<Principal> => {
+    const p = principals.get(req);
+    if (!p) throw new DomainError('forbidden', 'Not signed in');
+    return p;
   };
   const key = (req: FastifyRequest) => String(req.headers['idempotency-key'] ?? newId('http'));
 
   server.addHook('onRequest', async (req, reply) => {
-    if (req.url.startsWith('/api/') && !authed(req)) return reply.code(401).send({ type: 'unauthenticated', title: 'Missing or invalid dashboard token' });
+    if (!req.url.startsWith('/api/') || req.url.startsWith('/api/hooks/')) return;
+    const p = await resolve(req);
+    if (!p) return reply.code(401).send({ type: 'unauthenticated', title: 'Missing or invalid access token' });
+    principals.set(req, p);
   });
   server.setErrorHandler((err, _req, reply) => {
     if (err instanceof DomainError) {
@@ -63,43 +89,60 @@ export function buildServer(app: App, token: string) {
       req.query.objective ? [req.query.objective] : [])).rows);
   server.get('/api/events', async () => (await db.query('SELECT seq, type, aggregate_id, actor, payload, occurred_at FROM ledger_events ORDER BY seq DESC LIMIT 60')).rows);
   server.get('/api/audit', async () => verifyChain(db));
+  // CI webhook: authenticated by an HMAC signature over the raw body (set AIC_CI_WEBHOOK_SECRET in CI and here).
+  server.post('/api/hooks/ci', { config: { rawBody: true } }, async (req, reply) => {
+    const secret = process.env['AIC_CI_WEBHOOK_SECRET'];
+    if (!secret) return reply.code(503).send({ type: 'not_configured', title: 'Set AIC_CI_WEBHOOK_SECRET to enable the CI webhook' });
+    const raw = (req as FastifyRequest & { rawBody?: string }).rawBody ?? '';
+    const expected = `sha256=${createHmac('sha256', secret).update(raw).digest('hex')}`;
+    const given = String(req.headers['x-aic-signature'] ?? '');
+    if (given.length !== expected.length || !timingSafeEqual(Buffer.from(given), Buffer.from(expected))) return reply.code(401).send({ type: 'bad_signature', title: 'Invalid signature' });
+    const b = JSON.parse(raw) as { sha: string; status: 'success' | 'failure'; name: string; url?: string; branch?: string; delivery_id?: string };
+    const r = await app.ledger.run('recordCiResult', { sha: b.sha, status: b.status, name: b.name, url: b.url, branch: b.branch }, SYSTEM, `ci:${b.delivery_id ?? `${b.sha}:${b.name}:${b.status}`}`);
+    return r;
+  });
+  server.get('/api/me', async (req) => {
+    const p = await who(req);
+    const u = (await db.query<{ name: string; role: string }>('SELECT name, role FROM users WHERE id = $1', [p.id])).rows[0];
+    return { id: p.id, name: u?.name, role: u?.role, owner: !!p.stepUp };
+  });
 
   // ---- commands (CEO)
   server.post<{ Params: { id: string }; Body: { decision: 'approve' | 'request_changes'; rationale?: string } }>('/api/proposals/:id/decision', async (req) =>
-    app.ledger.run('decideProposal', { proposalId: req.params.id, decision: req.body.decision, rationale: req.body.rationale }, await ceo(), key(req)));
+    app.ledger.run('decideProposal', { proposalId: req.params.id, decision: req.body.decision, rationale: req.body.rationale }, await who(req), key(req)));
   server.post<{ Params: { id: string }; Body: { rationale?: string } }>('/api/tasks/:id/accept', async (req) => {
     const sub = (await db.query<{ submission_sha256: string }>(`SELECT submission_sha256 FROM submissions WHERE task_id = $1 AND status = 'open'`, [req.params.id])).rows[0];
     if (!sub) throw new DomainError('guard_failed', 'No open submission');
-    return app.ledger.run('acceptTask', { taskId: req.params.id, submissionSha256: sub.submission_sha256, rationale: req.body?.rationale }, await ceo(), key(req));
+    return app.ledger.run('acceptTask', { taskId: req.params.id, submissionSha256: sub.submission_sha256, rationale: req.body?.rationale }, await who(req), key(req));
   });
   server.post<{ Params: { id: string }; Body: { rationale: string } }>('/api/tasks/:id/reject', async (req) =>
-    app.ledger.run('rejectTask', { taskId: req.params.id, rationale: req.body.rationale }, await ceo(), key(req)));
+    app.ledger.run('rejectTask', { taskId: req.params.id, rationale: req.body.rationale }, await who(req), key(req)));
   server.post<{ Params: { id: string }; Body: { answer: string } }>('/api/escalations/:id/resolve', async (req) =>
-    app.ledger.run('resolveEscalation', { escalationId: req.params.id, answer: req.body.answer }, await ceo(), key(req)));
+    app.ledger.run('resolveEscalation', { escalationId: req.params.id, answer: req.body.answer }, await who(req), key(req)));
   server.post<{ Params: { id: string } }>('/api/directives/:id/confirm', async (req) => {
     const d = (await db.query<{ payload_sha256: string }>('SELECT payload_sha256 FROM directives WHERE id = $1', [req.params.id])).rows[0];
     if (!d) throw new DomainError('not_found', 'Directive not found');
-    return app.ledger.run('confirmDirective', { directiveId: req.params.id, payloadSha256: d.payload_sha256 }, await ceo(), key(req));
+    return app.ledger.run('confirmDirective', { directiveId: req.params.id, payloadSha256: d.payload_sha256 }, await who(req), key(req));
   });
   server.post<{ Params: { id: string }; Body: { reason?: string } }>('/api/directives/:id/decline', async (req) =>
-    app.ledger.run('rejectDirective', { directiveId: req.params.id, reason: req.body?.reason ?? 'declined' }, await ceo(), key(req)));
+    app.ledger.run('rejectDirective', { directiveId: req.params.id, reason: req.body?.reason ?? 'declined' }, await who(req), key(req)));
   server.post<{ Body: { employee: string; message: string } }>('/api/chat', async (req) => {
     const emp = (await db.query<{ id: string; display_name: string }>(`SELECT id, display_name FROM employees WHERE id = $1 OR role_key = $1 ORDER BY created_at LIMIT 1`, [req.body.employee])).rows[0];
     if (!emp) throw new DomainError('not_found', 'Employee not found');
-    const principal = await ceo();
+    const principal = await who(req);
     const existing = (await db.query<{ id: string }>('SELECT id FROM conversations WHERE employee_id = $1 ORDER BY created_at DESC LIMIT 1', [emp.id])).rows[0];
     const conversationId = existing?.id ?? (await app.ledger.run('startConversation', { employeeId: emp.id }, principal)).conversationId;
     const { runId } = await app.ledger.run('postMessage', { conversationId, body: req.body.message }, principal, key(req));
     return { employee: emp.display_name, ...(await app.orchestrator.converse(runId)) };
   });
   server.post<{ Body: { reason: string } }>('/api/emergency-stop', async (req) =>
-    app.ledger.run('emergencyStop', { scope: { type: 'company', id: (await db.query<{ id: string }>('SELECT id FROM company')).rows[0]!.id }, reason: req.body.reason || 'dashboard emergency stop' }, await ceo(), key(req)));
+    app.ledger.run('emergencyStop', { scope: { type: 'company', id: (await db.query<{ id: string }>('SELECT id FROM company')).rows[0]!.id }, reason: req.body.reason || 'dashboard emergency stop' }, await who(req), key(req)));
   server.post<{ Body: { mode?: Mode; ack?: boolean; reason?: string } }>('/api/resume', async (req) =>
     app.ledger.run('resumeScope', { scope: { type: 'company', id: (await db.query<{ id: string }>('SELECT id FROM company')).rows[0]!.id },
-      mode: req.body.mode ?? app.config.defaults.mode, acknowledgeUnresolvedActions: !!req.body.ack, reason: req.body.reason ?? 'resume' }, await ceo(), key(req)));
-  registerTeamRoutes(server, app, ceo);
+      mode: req.body.mode ?? app.config.defaults.mode, acknowledgeUnresolvedActions: !!req.body.ack, reason: req.body.reason ?? 'resume' }, await who(req), key(req)));
+  registerTeamRoutes(server, app, who);
   server.post<{ Params: { id: string }; Body: { employeeId: string; reason: string } }>('/api/tasks/:id/reassign', async (req) =>
-    app.ledger.run('reassignTask', { taskId: req.params.id, employeeId: req.body.employeeId, reason: req.body.reason }, await ceo(), key(req)));
+    app.ledger.run('reassignTask', { taskId: req.params.id, employeeId: req.body.employeeId, reason: req.body.reason }, await who(req), key(req)));
   server.get<{ Params: { id: string } }>('/api/tasks/:id/candidates', async (req) =>
     (await db.query(`SELECT e.id, e.display_name, e.role_key FROM employees e JOIN tasks t ON t.id = $1 JOIN employees o ON o.id = t.owner_employee_id
                      WHERE e.department_id = o.department_id AND e.status = 'active' AND e.category <> 'reviewer' AND e.id <> t.owner_employee_id
@@ -108,12 +151,12 @@ export function buildServer(app: App, token: string) {
     (await db.query(`SELECT r.key, r.current_version AS version, rv.text FROM requirements r JOIN requirement_versions rv ON rv.requirement_id = r.id AND rv.version = r.current_version
                      WHERE r.objective_id = $1 AND r.status = 'active' ORDER BY r.key`, [req.params.id])).rows);
   server.post<{ Params: { id: string }; Body: { key: string; text: string; reason: string } }>('/api/objectives/:id/requirements', async (req) =>
-    app.ledger.run('changeRequirement', { objectiveId: req.params.id, key: req.body.key, text: req.body.text, reason: req.body.reason || 'changed by CEO' }, await ceo(), key(req)));
+    app.ledger.run('changeRequirement', { objectiveId: req.params.id, key: req.body.key, text: req.body.text, reason: req.body.reason || 'changed by CEO' }, await who(req), key(req)));
   server.get('/api/doctor', async () => (await import('../ops/doctor.js')).runDoctor(app));
   server.post<{ Params: { id: string } }>('/api/objectives/:id/release', async (req) => {
     const sha = await app.workspaces.remoteSha(`refs/heads/${app.workspaces.integrationBranch(req.params.id)}`);
     if (!sha) throw new DomainError('not_found', 'No integration branch');
-    return app.ledger.run('approveRelease', { objectiveId: req.params.id, integrationSha: sha }, await ceo(), key(req));
+    return app.ledger.run('approveRelease', { objectiveId: req.params.id, integrationSha: sha }, await who(req), key(req));
   });
 
   return server;

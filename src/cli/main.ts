@@ -90,6 +90,11 @@ ${c.b('Oversight')}
   aic stop -m "why" | aic resume [--mode M4] [--ack]   emergency stop / resume
   aic audit                                        verify the tamper-evident ledger
 
+${c.b('People')}
+  aic users                                        people with access
+  aic users add "Name" --role approver             give a teammate a personal access token (approver|viewer|auditor|admin)
+  aic users revoke <user-or-token-id>              revoke access
+
 ${c.b('Operate')}
   aic doctor                                       readiness checks for your infrastructure
 
@@ -296,6 +301,31 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
         : await ledger.run('rejectTask', { taskId: pos[1]!, rationale: msg ?? '' }, await ceo(app));
       console.log(`${c.g('✔')} ${r.status}`);
       return;
+    }
+    case 'users': {
+      const sub = pos[1] ?? 'list';
+      if (sub === 'list') {
+        const rows = (await db.query<{ id: string; name: string; role: string; tokens: string }>(
+          `SELECT u.id, u.name, u.role, (SELECT count(*) FROM access_tokens a WHERE a.user_id = u.id AND a.revoked_at IS NULL) AS tokens FROM users u ORDER BY u.created_at`)).rows;
+        for (const u of rows) console.log(`  ${u.name.padEnd(24)} ${u.role.padEnd(9)} ${c.dim(u.id)}  active tokens: ${u.tokens}`);
+        return;
+      }
+      if (sub === 'add') {
+        const name = pos[2];
+        const role = String(flags['role'] ?? 'approver');
+        if (!name || !['admin', 'approver', 'member', 'viewer', 'auditor'].includes(role)) throw new Error('Usage: aic users add "Name" --role approver|viewer|auditor|admin [--email x]');
+        const principal = await ceo(app);
+        const { userId } = await ledger.run('addUser', { name, role: role as 'approver', email: typeof flags['email'] === 'string' ? flags['email'] : undefined }, principal);
+        const t = await ledger.run('issueAccessToken', { userId, label: `${name} (${role})` }, principal);
+        console.log(`${c.g('✔')} Added ${name} as ${role}.\n  Access token (shown once; share it privately): ${c.b(t.token)}\n  They open the dashboard and paste it, or use http://127.0.0.1:4100/#token=<token>`);
+        return;
+      }
+      if (sub === 'revoke') {
+        const r = await ledger.run('revokeAccessToken', { tokenId: pos[2] ?? '' }, await ceo(app));
+        console.log(r.revoked ? `${c.g('✔')} Revoked.` : 'Nothing to revoke.');
+        return;
+      }
+      throw new Error('Usage: aic users [list | add "Name" --role approver | revoke <user-or-token-id>]');
     }
     case 'reassign': {
       const [taskId, who] = [pos[1], pos[2]];

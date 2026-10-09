@@ -48,6 +48,7 @@
   <h1 id="company">The AI Company</h1>
   <nav id="nav"></nav>
   <span class="spacer"></span>
+  <span class="muted" id="me"></span>
   <span class="muted" id="fresh"></span>
   <button class="estop" id="estop" title="Stop all consequential work and fence in-flight runs">■ Emergency stop</button>
 </header>
@@ -363,6 +364,8 @@ async function saveDraft(hire) {
   }
 }
 
+api('/api/me').then((m) => { document.getElementById('me').textContent = `${m.name} · ${m.role}${m.owner ? ' (owner)' : ''}`; })
+  .catch(() => { view.innerHTML = '<div class="card">Sign in: open the dashboard link with your access token (…/#token=YOUR_TOKEN).</div>'; });
 renderNav(); refresh(); setInterval(() => { if (['Overview', 'Inbox', 'Org', 'Audit'].includes(current)) refresh(); }, 4000);
 </script>
 </body>

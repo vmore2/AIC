@@ -14,6 +14,8 @@ import * as talk from './commands/interaction.js';
 export const COMMANDS = {
   bootstrapCompany: org.bootstrapCompany,
   addUser: org.addUser,
+  issueAccessToken: org.issueAccessToken,
+  revokeAccessToken: org.revokeAccessToken,
   hireDepartment: org.hireDepartment,
   setMode: org.setMode,
   createObjective: work.createObjective,
@@ -39,6 +41,7 @@ export const COMMANDS = {
   approveRelease: work.approveRelease,
   changeRequirement: work.changeRequirement,
   reassignTask: work.reassignTask,
+  recordCiResult: work.recordCiResult,
   startVerification: ver.startVerification,
   recordEvidence: ver.recordEvidence,
   evaluateTask: ver.evaluateTask,
