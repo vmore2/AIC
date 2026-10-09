@@ -59,7 +59,7 @@ describe('end to end: CEO → team lead proposal → execution → independent v
 
     const tasks = await status(db, `SELECT id, title, status, attempt, assurance_label, owner_employee_id FROM tasks WHERE parent_task_id = $1 ORDER BY created_at`, [obj.planningTaskId]);
     expect(tasks.map((t) => t['status'])).toEqual(['accepted', 'accepted']);
-    const impl = tasks[0]!;
+    const impl = tasks.find((t) => String(t['title']).startsWith('Deliver'))!; // same-transaction rows share created_at
     // Attempt 1 claimed success with a bug; deterministic tests caught it; attempt 2 fixed it.
     expect(impl['attempt']).toBe(2);
     expect(impl['assurance_label']).toBe('A-det+rev');
