@@ -80,9 +80,11 @@ export const createObjective: Handler<CreateObjectiveInput, { objectiveId: strin
 
   const objectiveId = newId('obj');
   const riskFloor = maxRisk(i.riskFloor ?? 'R0', dep.risk_floor);
+  const companySettings = (await c.q.query<{ settings: Record<string, string> }>('SELECT settings FROM company LIMIT 1')).rows[0]?.settings ?? {};
+  const settings = { ...companySettings, ...(i.settings ?? {}) };
   await c.q.query(`INSERT INTO objectives (id, title, department_id, owner_employee_id, sponsor_user_id, status, risk_floor, budget_limit, deadline, settings)
                    VALUES ($1,$2,$3,$4,$5,'planning',$6,$7,$8,$9)`,
-    [objectiveId, i.title, dep.id, head.id, sponsor, riskFloor, i.budgetUsd, i.deadline ?? null, JSON.stringify(i.settings ?? {})]);
+    [objectiveId, i.title, dep.id, head.id, sponsor, riskFloor, i.budgetUsd, i.deadline ?? null, JSON.stringify(settings)]);
   const reqIds: string[] = [];
   for (const r of i.requirements) {
     const id = newId('req');

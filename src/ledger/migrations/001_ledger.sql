@@ -5,6 +5,7 @@
 CREATE TABLE company (
   id          text PRIMARY KEY,
   name        text NOT NULL,
+  settings    jsonb NOT NULL DEFAULT '{}',          -- default project settings (e.g. test_command)
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 

@@ -6,14 +6,14 @@ import { DepartmentSchema, type Department, type Role } from '../../org/schema.j
 import { validateDepartment } from '../../org/validate.js';
 import { DomainError, type Handler } from '../engine.js';
 
-export const bootstrapCompany: Handler<{ companyName: string; ceoName: string; ceoEmail?: string; defaultMode: Mode }, { companyId: string; ceoUserId: string }> =
+export const bootstrapCompany: Handler<{ companyName: string; ceoName: string; ceoEmail?: string; defaultMode: Mode; projectSettings?: Record<string, string> }, { companyId: string; ceoUserId: string }> =
   async (c, i) => {
     await c.authorize('company.bootstrap', { type: 'Company', id: 'company' }, {});
     const existing = await c.q.query('SELECT id FROM company');
     if (existing.rows.length) throw new DomainError('conflict', 'Company already initialized');
     const companyId = newId('co');
     const ceoUserId = newId('usr');
-    await c.q.query('INSERT INTO company (id, name) VALUES ($1,$2)', [companyId, i.companyName]);
+    await c.q.query('INSERT INTO company (id, name, settings) VALUES ($1,$2,$3)', [companyId, i.companyName, JSON.stringify(i.projectSettings ?? {})]);
     await c.q.query(`INSERT INTO users (id, name, email, role) VALUES ($1,$2,$3,'ceo')`, [ceoUserId, i.ceoName, i.ceoEmail ?? null]);
     await c.q.query(`INSERT INTO mode_settings (scope_type, scope_id, mode, set_by, reason) VALUES ('company', $1, $2, 'system', 'initial default')`, [companyId, i.defaultMode]);
     c.emit({ type: 'company.created', aggregateType: 'company', aggregateId: companyId, payload: { name: i.companyName, ceo_user_id: ceoUserId, mode: i.defaultMode } });

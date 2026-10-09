@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The AI Company — CEO</title>
+<style>
+  :root { --bg:#f7f7f5; --panel:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e4e4df; --accent:#2f5bd3; --ok:#1f8a4c; --warn:#b7791f; --bad:#c0392b; --chip:#eef1fb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121212; --panel:#1b1b1b; --ink:#ececea; --muted:#9a9a94; --line:#2c2c2a; --accent:#7ea0ff; --chip:#22283a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; align-items:center; gap:16px; padding:14px 24px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:2; }
+  header h1 { font-size:16px; margin:0; }
+  header .spacer { flex:1; }
+  nav button { background:none; border:0; color:var(--muted); font:inherit; padding:6px 10px; border-radius:6px; cursor:pointer; }
+  nav button.active { color:var(--ink); background:var(--chip); }
+  .estop { background:var(--bad); color:#fff; border:0; border-radius:6px; padding:8px 14px; font-weight:600; cursor:pointer; }
+  main { max-width:1100px; margin:0 auto; padding:24px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:14px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .muted { color:var(--muted); }
+  .pill { font-size:12px; padding:2px 8px; border-radius:99px; background:var(--chip); }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  .bars { display:grid; grid-template-columns: 90px 1fr 48px; gap:6px 10px; align-items:center; margin:10px 0 4px; }
+  .bar { height:10px; background:var(--line); border-radius:99px; overflow:hidden; }
+  .bar > span { display:block; height:100%; background:var(--accent); }
+  .bar.claimed > span { background:var(--muted); opacity:.6; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-weight:600; color:var(--muted); font-size:12px; }
+  button.act { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button.sec { background:none; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  textarea, input, select { width:100%; font:inherit; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+  .chat { display:flex; flex-direction:column; gap:10px; }
+  .msg { padding:10px 12px; border-radius:10px; max-width:80%; white-space:pre-wrap; }
+  .msg.me { align-self:flex-end; background:var(--chip); }
+  .msg.them { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
+  pre { white-space:pre-wrap; background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--line); max-height:260px; overflow:auto; }
+  .flag { color:var(--bad); font-weight:600; }
+  @media (max-width: 640px) { header { flex-wrap:wrap; } main { padding:16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="company">The AI Company</h1>
+  <nav id="nav"></nav>
+  <span class="spacer"></span>
+  <span class="muted" id="fresh"></span>
+  <button class="estop" id="estop" title="Stop all consequential work and fence in-flight runs">■ Emergency stop</button>
+</header>
+<main id="view"></main>
+<script>
+const TOKEN = (location.hash.match(/token=([^&]+)/) || [])[1] || sessionStorage.getItem('aic-token') || '';
+if (TOKEN) { sessionStorage.setItem('aic-token', TOKEN); history.replaceState(null, '', location.pathname); }
+const api = async (p, opts = {}) => {
+  const r = await fetch(p, { ...opts, headers: { 'content-type': 'application/json', 'x-aic-token': TOKEN, 'idempotency-key': crypto.randomUUID(), ...(opts.headers || {}) } });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.title || r.statusText);
+  return body;
+};
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const views = { Overview: overview, Inbox: inboxView, Team: team, Talk: talk, Audit: audit };
+let current = 'Overview';
+const nav = document.getElementById('nav');
+function renderNav() { nav.innerHTML = Object.keys(views).map((k) => `<button class="${k === current ? 'active' : ''}" data-v="${k}">${k}</button>`).join(''); }
+nav.onclick = (e) => { const v = e.target.dataset.v; if (v) { current = v; renderNav(); refresh(); } };
+const view = document.getElementById('view');
+async function refresh() {
+  try { await views[current](); document.getElementById('fresh').textContent = 'updated ' + new Date().toLocaleTimeString(); }
+  catch (e) { view.innerHTML = `<div class="card bad">${esc(e.message)}</div>`; }
+}
+const delivery = (d) => `<span class="pill ${d === 'done' || d === 'on_track' ? 'ok' : d === 'blocked' ? 'bad' : 'warn'}">${d.replace('_', ' ')}</span>`;
+
+async function overview() {
+  const s = await api('/api/status');
+  document.getElementById('company').textContent = s.company?.name || 'The AI Company';
+  if (!s.objectives.length) { view.innerHTML = `<div class="card">No objectives yet. Use <b>Talk</b> to brief a team lead.</div>`; return; }
+  view.innerHTML = s.objectives.map((o) => `
+    <div class="card">
+      <div class="row"><b>${esc(o.title)}</b><span class="muted">${esc(o.department)}</span>${delivery(o.delivery)}<span class="spacer"></span>
+        ${o.pendingDecisions ? `<span class="pill warn">${o.pendingDecisions} decision(s) waiting</span>` : ''}</div>
+      <div class="bars">
+        <span>Verified</span><div class="bar"><span style="width:${o.verifiedPct}%"></span></div><span>${o.verifiedPct}%</span>
+        <span>Claimed</span><div class="bar claimed"><span style="width:${o.claimedPct}%"></span></div><span>${o.claimedPct}%</span>
+      </div>
+      ${o.discrepancy > 0 ? `<div class="warn">⚠ ${o.discrepancy} points claimed by employees but not yet independently verified.</div>` : ''}
+      <div class="muted">${esc(o.deliveryReason)} · Budget $${o.budget.spent.toFixed(2)} / $${o.budget.limit.toFixed(2)} · ${Object.entries(o.tasks.byStatus).map(([k, v]) => `${k} ${v}`).join(' · ')}</div>
+      <div style="margin-top:8px"><button class="sec" onclick="tasks('${o.id}')">Tasks</button>
+        ${o.status === 'completed' ? `<button class="act" onclick="release('${o.id}')">Approve release to main</button>` : ''}</div>
+    </div>`).join('');
+}
+async function tasks(objectiveId) {
+  const rows = await api('/api/tasks?objective=' + objectiveId);
+  view.innerHTML = `<div class="card"><button class="sec" onclick="refresh()">← Back</button><table><tr><th>Task</th><th>Owner</th><th>Status</th><th>Attempt</th><th>Assurance</th></tr>
+    ${rows.map((t) => `<tr><td><a href="#" onclick="task('${t.id}');return false">${esc(t.title)}</a><div class="muted">${t.kind}</div></td><td>${esc(t.owner)}</td>
+      <td>${t.status}${t.hold ? ` <span class="bad">HOLD ${t.hold}</span>` : ''}</td><td>${t.attempt}</td><td>${t.assurance_label || ''}</td></tr>`).join('')}</table></div>`;
+}
+async function task(id) {
+  const d = await api('/api/tasks/' + id);
+  const t = d.task;
+  view.innerHTML = `<div class="card"><button class="sec" onclick="tasks('${t.objective_id}')">← Tasks</button>
+    <h3>${esc(t.title)}</h3><div class="muted">${t.status} · risk ${t.risk_tier} · attempt ${t.attempt}/${t.max_attempts} · owner ${esc(t.owner_name)} ${t.assurance_label ? '· ' + t.assurance_label : ''}</div>
+    ${d.requirements.map((r) => `<div class="muted">${r.key}@v${r.version}: ${esc(r.text)}</div>`).join('')}
+    <h4>Claim vs evidence</h4><table><tr><th>Criterion</th><th>Employee claimed</th><th>Platform verified</th></tr>
+    ${d.claimVsEvidence.map((x) => `<tr><td>${esc(x.criterion)}</td><td>${x.claimed || '—'}</td><td class="${x.verified === 'passed' ? 'ok' : x.verified === 'failed' ? 'bad' : 'warn'}">${x.verified}
+      ${x.claimed === 'met' && x.verified === 'failed' ? '<div class="flag">claim contradicted by evidence</div>' : ''}</td></tr>`).join('')}</table>
+    ${t.status === 'awaiting_acceptance' ? `<p><textarea id="ask" rows="2" placeholder="Rationale (required to request changes)"></textarea></p><p><button class="act" onclick="decideTask('${t.id}','accept')">Accept</button> <button class="sec" onclick="decideTask('${t.id}','reject')">Request changes</button></p>` : ''}
+    <h4>Runs</h4>${d.runs.map((r) => `<div>${r.mode} · ${esc(r.employee)} · ${r.status}${r.failure_reason ? ' (' + esc(r.failure_reason) + ')' : ''}</div>`).join('')}
+    <h4>Timeline (ledger)</h4><pre>${d.timeline.map((e) => `${e.seq} ${e.at} ${e.type} ${JSON.stringify(e.payload).slice(0, 160)}`).join('\n')}</pre></div>`;
+}
+async function decideTask(id, what) {
+  const rationale = what === 'reject' ? window.__ask('What should change?') : '';
+  if (what === 'reject' && !rationale) return;
+  await api(`/api/tasks/${id}/${what}`, { method: 'POST', body: JSON.stringify({ rationale }) }); task(id);
+}
+window.__ask = (q) => { const v = document.getElementById('ask'); return v ? v.value : ''; };
+
+async function inboxView() {
+  const items = await api('/api/inbox');
+  if (!items.length) { view.innerHTML = '<div class="card ok">Inbox zero.</div>'; return; }
+  view.innerHTML = `<div class="card"><label class="muted">Note / rationale for your next decision</label><textarea id="ask" rows="2" placeholder="Optional (required when requesting changes)"></textarea></div>` +
+    (await Promise.all(items.map(async (i) => {
+      let extra = '';
+      if (i.kind === 'plan') {
+        const p = await api('/api/proposals/' + i.id);
+        extra = `<table><tr><th>Task</th><th>Owner</th><th>Covers</th><th>Budget</th></tr>${p.content.tasks.map((t) => `<tr><td>${esc(t.title)}<div class="muted">${esc(t.spec)}</div></td><td>${t.owner_role}</td><td>${t.requirement_keys.join(', ')}</td><td>$${t.budget_usd}</td></tr>`).join('')}</table>
+          <p><button class="act" onclick="decidePlan('${i.id}','approve')">Approve plan</button> <button class="sec" onclick="decidePlan('${i.id}','request_changes')">Request changes</button></p>`;
+      } else if (i.kind === 'directive') {
+        const d = await api('/api/directives/' + i.id);
+        extra = `<pre>${esc(JSON.stringify(d.payload, null, 2))}</pre><p><button class="act" onclick="directive('${i.id}','confirm')">Confirm</button> <button class="sec" onclick="directive('${i.id}','decline')">Decline</button></p>`;
+      } else if (i.kind === 'escalation') {
+        extra = `<p><button class="act" onclick="resolveEsc('${i.id}')">Answer with the note above</button></p>`;
+      } else if (i.kind === 'release') {
+        extra = `<p><button class="act" onclick="release('${i.id}')">Approve release</button></p>`;
+      } else {
+        extra = `<p><button class="sec" onclick="task('${i.id}')">Open</button></p>`;
+      }
+      return `<div class="card"><b>${esc(i.title)}</b><div class="muted">${esc(i.detail)}</div>${extra}</div>`;
+    }))).join('');
+}
+async function decidePlan(id, decision) {
+  const rationale = window.__ask();
+  if (decision === 'request_changes' && !rationale) { alertBox('Write what should change in the note box first.'); return; }
+  await api(`/api/proposals/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision, rationale }) }); refresh();
+}
+async function directive(id, what) { await api(`/api/directives/${id}/${what}`, { method: 'POST', body: JSON.stringify({ reason: window.__ask() }) }); refresh(); }
+async function resolveEsc(id) { const answer = window.__ask(); if (!answer) { alertBox('Write your answer in the note box first.'); return; } await api(`/api/escalations/${id}/resolve`, { method: 'POST', body: JSON.stringify({ answer }) }); refresh(); }
+async function release(id) { await api(`/api/objectives/${id}/release`, { method: 'POST', body: '{}' }); refresh(); }
+function alertBox(text) { view.insertAdjacentHTML('afterbegin', `<div class="card warn">${esc(text)}</div>`); }
+
+async function team() {
+  const deps = await api('/api/team');
+  view.innerHTML = deps.map((d) => `<div class="card"><b>${esc(d.name)}</b> <span class="muted">default mode ${d.default_mode}</span>
+    <table><tr><th>Employee</th><th>Category</th><th>Active</th><th>Accepted</th><th>Rework</th><th>Model</th></tr>
+    ${d.employees.map((e) => `<tr><td>${esc(e.display_name)}</td><td>${e.category}</td><td>${e.active}</td><td>${e.accepted}</td><td>${e.reworkRate === null ? '—' : e.reworkRate + '%'}</td><td class="muted">${esc(e.model_profile)}</td></tr>`).join('')}</table></div>`).join('')
+    || '<div class="card">No departments hired yet. Run <code>aic hire &lt;department&gt;</code>.</div>';
+}
+
+const chatLog = [];
+async function talk() {
+  const deps = await api('/api/team');
+  const leads = deps.flatMap((d) => d.employees.filter((e) => e.category === 'manager'));
+  view.innerHTML = `<div class="card"><div class="row"><select id="who">${leads.map((l) => `<option value="${l.id}">${esc(l.display_name)}</option>`).join('')}</select></div>
+    <div class="chat" id="log" style="margin:14px 0">${chatLog.join('')}</div>
+    <textarea id="say" rows="3" placeholder="Tell your team lead what you need…"></textarea>
+    <p><button class="act" id="send">Send</button> <span class="muted">Leads answer from the ledger. Anything that changes work comes back as a proposal you confirm.</span></p></div>`;
+  document.getElementById('send').onclick = async () => {
+    const message = document.getElementById('say').value.trim(); if (!message) return;
+    chatLog.push(`<div class="msg me">${esc(message)}</div>`); talk();
+    const r = await api('/api/chat', { method: 'POST', body: JSON.stringify({ employee: document.getElementById('who').value, message }) });
+    chatLog.push(`<div class="msg them"><b>${esc(r.employee)}</b>\n${esc(r.reply)}${r.directives.map((d) => `\n\n◆ Proposal awaiting your confirmation: ${esc(d.summary)} — see Inbox`).join('')}</div>`);
+    talk();
+  };
+}
+async function audit() {
+  const a = await api('/api/audit'); const ev = await api('/api/events');
+  view.innerHTML = `<div class="card"><b class="${a.ok ? 'ok' : 'bad'}">${a.ok ? `Ledger hash chain intact (${a.checked} events)` : `TAMPERING DETECTED at event ${a.brokenAt}`}</b></div>
+    <div class="card"><table><tr><th>#</th><th>Event</th><th>Actor</th><th>Detail</th></tr>${ev.map((e) => `<tr><td>${e.seq}</td><td>${e.type}</td><td class="muted">${esc(e.actor.type)}:${esc(e.actor.id).slice(0, 18)}</td><td class="muted">${esc(JSON.stringify(e.payload).slice(0, 140))}</td></tr>`).join('')}</table></div>`;
+}
+document.getElementById('estop').onclick = async () => {
+  if (document.getElementById('estop').dataset.armed !== '1') { document.getElementById('estop').dataset.armed = '1'; document.getElementById('estop').textContent = 'Click again to STOP'; return; }
+  await api('/api/emergency-stop', { method: 'POST', body: JSON.stringify({ reason: 'dashboard emergency stop' }) });
+  document.getElementById('estop').textContent = 'STOPPED'; refresh();
+};
+renderNav(); refresh(); setInterval(() => { if (current !== 'Talk') refresh(); }, 4000);
+</script>
+</body>
+</html>
