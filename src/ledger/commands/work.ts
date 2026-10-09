@@ -177,7 +177,7 @@ export const recordUsage: Handler<{ runId: string; inputTokens: number; outputTo
   return { remainingUsd: Math.max(0, reservedLeft - i.costUsd) };
 };
 
-export type RunOutcome = 'failed' | 'abandoned' | 'ended_without_submission' | 'interrupted' | 'cancelled' | 'submitted' | 'completed';
+export type RunOutcome = 'failed' | 'abandoned' | 'ended_without_submission' | 'interrupted' | 'cancelled' | 'submitted' | 'completed' | 'suspended';
 
 export const endRun: Handler<{ runId: string; outcome: RunOutcome; reason?: string }, { taskStatus: string | null }> = async (c, i) => {
   await c.authorize('run.end', { type: 'Run', id: i.runId }, {});
@@ -192,7 +192,8 @@ export const endRun: Handler<{ runId: string; outcome: RunOutcome; reason?: stri
     await c.q.query('UPDATE objectives SET budget_reserved = GREATEST(0, budget_reserved - $2) WHERE id = $1', [task.objective_id, unusedReservation]);
     const lease = await getLease(c.q, run.task_id);
     const current = lease && lease.run_id === run.id && lease.epoch === run.lease_epoch;
-    if (current && ['in_progress', 'awaiting_input'].includes(task.status) && i.outcome !== 'submitted') {
+    // A suspended run (blocker raised) waits for the human/manager decision; no transition here.
+    if (current && ['in_progress', 'awaiting_input'].includes(task.status) && i.outcome !== 'submitted' && i.outcome !== 'suspended') {
       const budgetExhausted = Number(task.budget_spent) >= Number(task.budget_limit) - 1e-9;
       const r = await transitionTask(c, run.task_id, i.outcome === 'abandoned' || i.outcome === 'interrupted' ? 'RecordRunAbandoned' : 'RecordRunFailed',
         { budgetExhausted }, { reason: `${i.outcome}${i.reason ? `: ${i.reason}` : ''}`, runId: run.id });
@@ -488,3 +489,44 @@ export const reopenTask: Handler<{ taskId: string; reason: string }, { status: s
   return { status: r.to, suspect: down.rows.map((d) => d.task_id) };
 };
 
+
+/** Tool-call audit records written by the Tool Gateway (tool_calls is a protected table, INV-1). */
+export const recordToolCall: Handler<{ runId: string; tool: string; actionClass: string; argsSha256: string; decision: 'allow' | 'deny' | 'error'; reasons: string[]; epoch: number | null }, { seq: number }> = async (c, i) => {
+  await c.authorize('toolcall.record', { type: 'Run', id: i.runId }, {});
+  const seq = Number((await c.q.query<{ n: string }>('SELECT count(*) AS n FROM tool_calls WHERE run_id = $1', [i.runId])).rows[0]!.n) + 1;
+  await c.q.query('INSERT INTO tool_calls (id, run_id, seq, tool, action_class, args_sha256, decision, reasons, lease_epoch) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [newId('tc'), i.runId, seq, i.tool, i.actionClass, i.argsSha256, i.decision, JSON.stringify(i.reasons), i.epoch]);
+  if (i.decision !== 'allow') c.emit({ type: 'tool_call.denied', aggregateType: 'run', aggregateId: i.runId, payload: { tool: i.tool, decision: i.decision, reasons: i.reasons } });
+  return { seq };
+};
+
+/** System: mark an objective complete once every planned task is accepted with intact integrity. */
+export const completeObjective: Handler<{ objectiveId: string }, { completed: boolean; remaining: number }> = async (c, i) => {
+  await c.authorize('objective.complete', { type: 'Objective', id: i.objectiveId }, {});
+  const obj = await getObjective(c.q, i.objectiveId, true);
+  if (obj.status !== 'active') return { completed: false, remaining: -1 };
+  const r = await c.q.query<{ n: string }>(
+    `SELECT count(*) AS n FROM tasks WHERE objective_id = $1 AND kind <> 'planning' AND status NOT IN ('cancelled','superseded')
+       AND NOT (status = 'accepted' AND integrity = 'ok')`, [i.objectiveId]);
+  const remaining = Number(r.rows[0]!.n);
+  const total = Number((await c.q.query<{ n: string }>(`SELECT count(*) AS n FROM tasks WHERE objective_id = $1 AND kind <> 'planning'`, [i.objectiveId])).rows[0]!.n);
+  if (remaining > 0 || total === 0) return { completed: false, remaining };
+  await c.q.query(`UPDATE objectives SET status = 'completed', version = version + 1 WHERE id = $1`, [i.objectiveId]);
+  c.emit({ type: 'objective.completed', aggregateType: 'objective', aggregateId: i.objectiveId, payload: { tasks: total, note: 'All planned work accepted. Release to the main branch requires CEO approval.' } });
+  return { completed: true, remaining: 0 };
+};
+
+/** CEO approves releasing an objective's integrated work to the protected base branch (A5). */
+export const approveRelease: Handler<{ objectiveId: string; integrationSha: string; rationale?: string }, { approvalId: string }> = async (c, i) => {
+  await c.authorize('approval.decide', { type: 'Objective', id: i.objectiveId }, { action_class: 'A5' });
+  const obj = await getObjective(c.q, i.objectiveId);
+  if (obj.status !== 'completed') throw new DomainError('guard_failed', 'Only completed objectives can be released');
+  if (!/^[0-9a-f]{7,64}$/.test(i.integrationSha)) throw new DomainError('validation', 'integrationSha must be the reviewed commit');
+  const approvalId = newId('apr');
+  await c.q.query(`INSERT INTO approvals (id, subject_type, subject_id, subject_sha256, risk_tier, scope_text, status, decided_by, decided_at, rationale, expires_at)
+                   VALUES ($1,'external_action',$2,$3,$4,$5,'approved',$6,$7,$8,$9)`,
+    [approvalId, i.objectiveId, i.integrationSha, obj.risk_floor, `Merge integration ${i.integrationSha.slice(0, 12)} into the base branch`, c.principal.id, c.now.toISOString(), i.rationale ?? null,
+      new Date(c.now.getTime() + 24 * 3600_000).toISOString()]);
+  c.emit({ type: 'release.approved', aggregateType: 'objective', aggregateId: i.objectiveId, payload: { approval_id: approvalId, integration_sha: i.integrationSha } });
+  return { approvalId };
+};

@@ -43,6 +43,11 @@ export const ConfigSchema = z.object({
     mode: z.enum(MODES).default('M4'),
     project_settings: z.record(z.string()).default({ test_command: 'npm test' }),
   }).default({}),
+  /**
+   * Sandbox for agent-executed commands. Production must use an isolated sandbox (microVM/gVisor).
+   * `allow_unisolated_local` permits a plain local subprocess for evaluation on a trusted machine only.
+   */
+  sandbox: z.object({ allow_unisolated_local: z.boolean().default(false) }).default({}),
   /** Where run workspaces and transcripts are stored (customer storage). */
   storage_path: z.string().default('.aic/storage'),
   templates_path: z.string().default('templates/departments'),
@@ -114,5 +119,10 @@ code_hosting:
 defaults:
   mode: M4            # Plan Gates: the CEO approves plans before execution
   project_settings:
-    test_command: npm test
+    test_command: node --test
+
+# WARNING: local evaluation only. Agent-run commands execute as normal processes on this
+# machine (scrubbed environment, timeouts) but are NOT isolated. Use an isolated sandbox in production.
+sandbox:
+  allow_unisolated_local: true
 `;

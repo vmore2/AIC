@@ -26,6 +26,7 @@ export const COMMANDS = {
   raiseEscalation: work.raiseEscalation,
   resolveEscalation: work.resolveEscalation,
   postUpdate: work.postUpdate,
+  recordToolCall: work.recordToolCall,
   acceptTask: work.acceptTask,
   rejectTask: work.rejectTask,
   decideProposal: work.decideProposal,
@@ -33,6 +34,8 @@ export const COMMANDS = {
   cancelTask: work.cancelTask,
   retryTask: work.retryTask,
   reopenTask: work.reopenTask,
+  completeObjective: work.completeObjective,
+  approveRelease: work.approveRelease,
   startVerification: ver.startVerification,
   recordEvidence: ver.recordEvidence,
   evaluateTask: ver.evaluateTask,
@@ -45,8 +48,8 @@ export const COMMANDS = {
 } as const;
 
 export type CommandName = keyof typeof COMMANDS;
-type In<K extends CommandName> = (typeof COMMANDS)[K] extends Handler<infer I, unknown> ? I : never;
-type Out<K extends CommandName> = (typeof COMMANDS)[K] extends Handler<never, infer O> ? O : never;
+export type CommandInput<K extends CommandName> = (typeof COMMANDS)[K] extends Handler<infer I, unknown> ? I : never;
+export type CommandOutput<K extends CommandName> = (typeof COMMANDS)[K] extends Handler<never, infer O> ? O : never;
 
 export class Ledger {
   constructor(readonly db: Db, readonly engine: Engine) {}
@@ -58,8 +61,8 @@ export class Ledger {
   }
 
   /** Execute a command. Supply a stable `key` when retrying the same intent (idempotency). */
-  run<K extends CommandName>(name: K, input: In<K>, principal: Principal, key: string = newId('cmd')): Promise<Out<K>> {
-    return this.engine.execute(name, COMMANDS[name] as unknown as Handler<In<K>, Out<K>>, input, principal, key);
+  run<K extends CommandName>(name: K, input: CommandInput<K>, principal: Principal, key: string = newId('cmd')): Promise<CommandOutput<K>> {
+    return this.engine.execute(name, COMMANDS[name] as unknown as Handler<CommandInput<K>, CommandOutput<K>>, input, principal, key);
   }
 
   close() { return this.db.close(); }

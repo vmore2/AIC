@@ -86,7 +86,8 @@ export function validatePlan(raw: unknown, ctx: PlanContext): PlanValidation {
     const role = roles.get(t.owner_role);
     if (!role) { errors.push(`[${t.ref}] unknown owner_role "${t.owner_role}"`); continue; }
     if (role.category === 'reviewer') errors.push(`[${t.ref}] reviewers are assigned by the platform, not planned as owners`);
-    if (!leadsTeam.has(role.key)) errors.push(`[${t.ref}] "${role.key}" is not on the lead's team`);
+    // QA roles sit outside the producer chain by design but take test-authoring work from the plan.
+    if (!leadsTeam.has(role.key) && role.category !== 'qa') errors.push(`[${t.ref}] "${role.key}" is not on the lead's team`);
     if (!role.task_kinds.includes(t.kind)) errors.push(`[${t.ref}] role "${role.key}" cannot own task kind "${t.kind}"`);
     for (const k of t.requirement_keys) {
       if (!(k in coverage)) errors.push(`[${t.ref}] unknown requirement "${k}"`);

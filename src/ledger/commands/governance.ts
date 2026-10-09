@@ -59,7 +59,7 @@ export const resumeScope: Handler<{ scope: Scope; mode: Mode; acknowledgeUnresol
 
 // ---- External actions: intent → attempt → outcome → reconcile (INV-11). Written by the Tool Gateway / executors.
 
-export const recordActionIntent: Handler<{ taskId: string; runId: string; epoch: number; connector: string; action: string; actionClass: string;
+export const recordActionIntent: Handler<{ taskId: string; runId: string | null; epoch: number; connector: string; action: string; actionClass: string;
   idempotencyMode: 'native_key' | 'natural_key' | 'none'; naturalKey?: string; payload: Record<string, unknown>; approvalId?: string }, { actionId: string; idempotencyKey: string }> = async (c, i) => {
   await c.authorize('action.record', { type: 'Task', id: i.taskId }, {});
   const actionId = newId('act');
