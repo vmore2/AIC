@@ -4,7 +4,7 @@ import type { ModelProfile } from '../src/config/config.js';
 import type { Department } from '../src/org/schema.js';
 import { SYSTEM, type Principal } from '../src/domain/types.js';
 
-export const departments = loadDepartments('templates/departments').departments;
+export const departments = loadDepartments('templates/recommended').departments;
 export const dept = (k: string): Department => structuredClone(departments.find((d) => d.key === k)!);
 
 export const profile = (key: string, family: string): ModelProfile => ({

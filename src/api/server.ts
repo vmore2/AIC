@@ -11,11 +11,18 @@ import { type Mode, type Principal } from '../domain/types.js';
 import { newId } from '../domain/ids.js';
 import { DomainError, verifyChain } from '../ledger/engine.js';
 import { inbox, objectiveRollups, orgChart, taskDetail } from '../reports/views.js';
+import { registerTeamRoutes } from './teams.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 
 export async function startServer(app: App, port = 4100, host = '127.0.0.1') {
   const token = process.env['AIC_DASHBOARD_TOKEN'] ?? randomBytes(18).toString('base64url');
+  const server = buildServer(app, token);
+  return server;
+}
+
+/** The HTTP app without listening (used by startServer and tests). */
+export function buildServer(app: App, token: string) {
   const server = Fastify({ logger: false });
   const db = app.ledger.db;
 
@@ -90,16 +97,12 @@ export async function startServer(app: App, port = 4100, host = '127.0.0.1') {
   server.post<{ Body: { mode?: Mode; ack?: boolean; reason?: string } }>('/api/resume', async (req) =>
     app.ledger.run('resumeScope', { scope: { type: 'company', id: (await db.query<{ id: string }>('SELECT id FROM company')).rows[0]!.id },
       mode: req.body.mode ?? app.config.defaults.mode, acknowledgeUnresolvedActions: !!req.body.ack, reason: req.body.reason ?? 'resume' }, await ceo(), key(req)));
+  registerTeamRoutes(server, app, ceo);
   server.post<{ Params: { id: string } }>('/api/objectives/:id/release', async (req) => {
     const sha = await app.workspaces.remoteSha(`refs/heads/${app.workspaces.integrationBranch(req.params.id)}`);
     if (!sha) throw new DomainError('not_found', 'No integration branch');
     return app.ledger.run('approveRelease', { objectiveId: req.params.id, integrationSha: sha }, await ceo(), key(req));
   });
 
-  await app.orchestrator.recoverOrphans();
-  app.orchestrator.start(750);
-  await server.listen({ port, host });
-  console.log(`Dashboard: http://${host}:${port}/#token=${token}`);
-  console.log('Keep this token private. The server binds to localhost only.');
   return server;
 }

@@ -6,7 +6,8 @@ import { createApp, type App } from '../app.js';
 import { DEFAULT_CONFIG_FILE, loadConfig, STARTER_CONFIG } from '../config/config.js';
 import { MODE_NAMES, MODES, SYSTEM, type Mode, type Principal } from '../domain/types.js';
 import { DomainError, verifyChain } from '../ledger/engine.js';
-import { loadDepartments } from '../org/validate.js';
+import { loadCatalog, loadTeamFile, scaffoldTeam, type CatalogEntry } from '../org/catalog.js';
+import { CAPABILITIES } from '../org/teamSpec.js';
 import { profileForRole } from '../runtime/models.js';
 import { inbox, objectiveRollups, orgChart, taskDetail } from '../reports/views.js';
 
@@ -53,11 +54,15 @@ const HELP = `${c.b('aic')} — The AI Company (you bring the infrastructure; th
 
 ${c.b('Setup')}
   aic init [--company "Acme"] [--ceo "Your Name"]   create aic.config.yaml (if missing) and the company ledger
-  aic org departments                              list department templates
-  aic org show <department>                        roles, structure, workflows, safeguards
-  aic org validate [dir]                           check templates against the architecture rules
-  aic hire <department>                            hire a department (validates model capabilities)
-  aic team                                         org chart with live workload
+  aic hire <team>                                  hire a team (validates model capabilities)
+  aic org                                          your org chart with live workload
+
+${c.b('Teams (recommended + your own)')}
+  aic teams                                        browse the team catalog
+  aic teams show <team>                            roles, structure, workflow, and what the platform derived
+  aic teams new <team> [--name "Growth Marketing"] scaffold a custom team: just define the roles
+  aic teams check [team|file]                      validate against the architecture rules
+  aic teams capabilities                           what roles can work with (code, documents, crm, ...)
 
 ${c.b('Talk to your team leads')}
   aic chat <employee|role> "message"               a lead answers from the ledger and drafts proposals
@@ -95,14 +100,7 @@ async function main() {
     writeFileSync(cfgFile, STARTER_CONFIG.replace('Acme Inc', String(flags['company'] ?? 'Acme Inc')));
     console.log(`${c.g('✔')} wrote ${cfgFile} — edit it to point at your database, model providers, and code hosting.`);
   }
-  if (cmd === 'org' && pos[1] === 'validate') {
-    const dir = pos[2] ?? (existsSync(cfgFile) ? loadConfig(cfgFile).templates_path : 'templates/departments');
-    const r = loadDepartments(dir);
-    for (const f of r.findings) console.log(`${f.level === 'error' ? c.r('error') : c.y('warn ')} ${f.department} ${c.dim(f.rule)} ${f.message}`);
-    console.log(`${r.departments.length} departments, ${r.departments.reduce((s, d) => s + d.roles.length, 0)} roles, ${r.findings.filter((f) => f.level === 'error').length} errors`);
-    process.exitCode = r.findings.some((f) => f.level === 'error') ? 1 : 0;
-    return;
-  }
+  if (cmd === 'teams') { teamsCommand(pos, flags, cfgFile); return; }
 
   const config = loadConfig(cfgFile);
   const verbose = !!flags['verbose'];
@@ -125,7 +123,6 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
   const { ledger, orchestrator, config } = app;
   const db = ledger.db;
   const msg = typeof flags['m'] === 'string' ? flags['m'] : undefined;
-  const templates = () => loadDepartments(config.templates_path).departments;
 
   switch (cmd) {
     case 'init': {
@@ -133,51 +130,22 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
       if (exists) { console.log('Company already initialized.'); return; }
       await ledger.run('bootstrapCompany', { companyName: config.company.name, ceoName: String(flags['ceo'] ?? 'CEO'), defaultMode: config.defaults.mode, projectSettings: config.defaults.project_settings }, SYSTEM);
       console.log(`${c.g('✔')} ${config.company.name} is ready. Mode: ${config.defaults.mode} (${MODE_NAMES[config.defaults.mode]}).`);
-      console.log(`Next: ${c.cy('aic org departments')}, then ${c.cy('aic hire engineering')}.`);
+      console.log(`Next: ${c.cy('aic teams')} to browse teams, then ${c.cy('aic hire engineering')}.`);
       return;
-    }
-    case 'org': {
-      const deps = templates();
-      if (pos[1] === 'departments' || !pos[1]) {
-        for (const d of deps) console.log(`${c.b(d.key.padEnd(18))} ${d.name.padEnd(32)} ${String(d.roles.length).padStart(2)} roles  mode ${d.default_mode}  floor ${d.risk_floor}`);
-        return;
-      }
-      if (pos[1] === 'show') {
-        const d = deps.find((x) => x.key === pos[2]);
-        if (!d) throw new Error(`Unknown department ${pos[2]}`);
-        console.log(`${c.b(d.name)} — ${d.purpose.trim()}\n`);
-        console.log(c.b('Structure'));
-        const print = (parent: string, indent: string) => {
-          for (const s of d.structure.filter((x) => x.reports_to === parent)) {
-            const r = d.roles.find((x) => x.key === s.role)!;
-            console.log(`${indent}${r.title}${s.count > 1 ? ` ×${s.count}` : ''} ${c.dim(`[${r.category}, ${r.rule_of_two_profile}]`)}`);
-            print(s.role, indent + '   ');
-          }
-        };
-        console.log('CEO'); print('ceo', '   ');
-        console.log(`\n${c.b('Roles')}`);
-        for (const r of d.roles) {
-          console.log(`  ${c.b(r.title)} (${r.key}) — ${r.charter.trim()}`);
-          console.log(c.dim(`    tools: ${r.tools.join(', ')}`));
-          for (const cr of r.criteria_templates) console.log(c.dim(`    criterion: ${cr.statement} [${cr.kind}, verified by ${cr.independence}]`));
-          if (r.reviewer_role) console.log(c.dim(`    reviewed by: ${r.reviewer_role}`));
-        }
-        console.log(`\n${c.b('Workflows')}`);
-        for (const w of d.workflows) console.log(`  ${w.name}: ${w.stages.map((s) => `${s.key}${s.gate !== 'none' ? `[${s.gate}]` : ''}`).join(' → ')}`);
-        console.log(`\n${c.b('Never autonomous')}: ${d.never_autonomous.join('; ') || '—'}`);
-        return;
-      }
-      throw new Error('Usage: aic org departments | show <dept> | validate');
     }
     case 'hire': {
-      const d = templates().find((x) => x.key === pos[1]);
-      if (!d) throw new Error(`Unknown department "${pos[1]}". See \`aic org departments\`.`);
+      const entry = loadCatalog(config.teams_path).get(pos[1] ?? '');
+      if (!entry) throw new Error(`Unknown team "${pos[1]}". See \`aic teams\`.`);
+      if (entry.errors.length || !entry.department) throw new Error(`Team "${entry.key}" has errors; run \`aic teams check ${entry.key}\`:\n  - ${entry.errors.join('\n  - ')}`);
+      const d = entry.department;
       const models = Object.fromEntries(d.roles.map((r) => [r.key, profileForRole(config, r.key)]));
       const r = await ledger.run('hireDepartment', { template: d, models }, await ceo(app));
-      console.log(`${c.g('✔')} Hired ${d.name}: ${r.employees.length} employees`);
+      console.log(`${c.g('✔')} Hired ${d.name} (${entry.source}): ${r.employees.length} employees`);
       for (const e of r.employees) console.log(`   ${e.name.padEnd(36)} ${c.dim(e.role)}  model: ${models[e.role]!.key}`);
+      console.log(`Brief the lead: ${c.cy(`aic chat ${d.head} "what you need"`)}`);
       return;
     }
+    case 'org':
     case 'team': {
       for (const d of await orgChart(db)) {
         console.log(`${c.b(d.name)} ${c.dim(`(${d.key}, default mode ${d.default_mode})`)}`);
@@ -357,5 +325,77 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
   }
 }
 
+function teamsCommand(pos: string[], flags: Record<string, string | true>, cfgFile: string) {
+  const customDir = existsSync(cfgFile) ? loadConfig(cfgFile).teams_path : path.resolve('teams');
+  const catalog = loadCatalog(customDir);
+  const sub = pos[1] ?? 'list';
+  const badge = (e: CatalogEntry) => (e.source === 'recommended' ? c.cy('recommended') : c.g('custom     '));
+  const status = (e: CatalogEntry) => (e.errors.length ? c.r(`${e.errors.length} error(s)`) : e.warnings.length ? c.y(`${e.warnings.length} warning(s)`) : c.g('ok'));
+  if (sub === 'list') {
+    for (const e of catalog.entries) {
+      const d = e.department;
+      console.log(`${badge(e)} ${c.b(e.key.padEnd(18))} ${(d?.name ?? e.name).padEnd(32)} ${d ? `${String(d.roles.length).padStart(2)} roles  mode ${d.default_mode}  floor ${d.risk_floor}` : ''.padEnd(29)}  ${status(e)}`);
+    }
+    console.log(c.dim(`\nYour custom teams live in ${customDir}. Create one with: aic teams new <key> --name "Team Name"`));
+    return;
+  }
+  if (sub === 'capabilities') {
+    for (const [k, v] of Object.entries(CAPABILITIES)) console.log(`  ${c.b(k.padEnd(16))} ${v.label}  ${c.dim(v.tools.join(', '))}`);
+    return;
+  }
+  if (sub === 'new') {
+    const key = pos[2];
+    if (!key) throw new Error('Usage: aic teams new <key> --name "Team Name"');
+    const name = typeof flags['name'] === 'string' ? flags['name'] : key.split('_').map((w) => w[0]!.toUpperCase() + w.slice(1)).join(' ');
+    const file = scaffoldTeam(customDir, key, name);
+    console.log(`${c.g('✔')} Created ${file}\n  1. Edit the roles: title, what each one does, what it works with, what it delivers\n  2. ${c.cy(`aic teams check ${key}`)}\n  3. ${c.cy(`aic hire ${key}`)}`);
+    return;
+  }
+  const target = pos[2];
+  const one = target ? (catalog.get(target) ?? (existsSync(target) ? loadTeamFile(path.resolve(target), 'custom') : undefined)) : undefined;
+  const entries = sub === 'check' && !target ? catalog.entries : one ? [one] : [];
+  if (!entries.length) throw new Error(`Unknown team "${target ?? ''}". See \`aic teams\`.`);
+  if (sub === 'check') {
+    let errors = 0;
+    for (const e of entries) {
+      console.log(`${badge(e)} ${c.b(e.key)} ${status(e)} ${c.dim(e.file)}`);
+      for (const x of e.errors) console.log(`   ${c.r('error')} ${x}`);
+      for (const x of e.warnings) console.log(`   ${c.y('warn ')} ${x}`);
+      for (const x of e.notes) console.log(`   ${c.dim('note  ' + x)}`);
+      errors += e.errors.length;
+    }
+    console.log(`${entries.length} team(s), ${entries.reduce((n, e) => n + (e.department?.roles.length ?? 0), 0)} roles, ${errors} error(s)`);
+    process.exitCode = errors ? 1 : 0;
+    return;
+  }
+  if (sub === 'show') {
+    const e = entries[0]!;
+    const d = e.department;
+    if (!d) { for (const x of e.errors) console.log(`${c.r('error')} ${x}`); process.exitCode = 1; return; }
+    console.log(`${c.b(d.name)} ${badge(e)} ${c.dim(`${e.format === 'team_spec' ? 'short team spec' : 'full template'} · ${e.file}`)}\n${d.purpose.trim()}\n`);
+    console.log(c.b('Structure'));
+    const print = (parent: string, indent: string) => {
+      for (const s of d.structure.filter((x) => x.reports_to === parent)) {
+        const r = d.roles.find((x) => x.key === s.role)!;
+        console.log(`${indent}${r.title}${s.count > 1 ? ` x${s.count}` : ''} ${c.dim(`[${r.category}, ${r.rule_of_two_profile}]`)}`);
+        print(s.role, indent + '   ');
+      }
+    };
+    console.log('CEO'); print('ceo', '   ');
+    console.log(`\n${c.b('Roles')} ${e.format === 'team_spec' ? c.dim('(tools, acceptance criteria, and profiles derived by the platform)') : ''}`);
+    for (const r of d.roles) {
+      console.log(`  ${c.b(r.title)} (${r.key}): ${r.charter.trim()}`);
+      console.log(c.dim(`    tools: ${r.tools.join(', ')}`));
+      for (const cr of r.criteria_templates) console.log(c.dim(`    acceptance: ${cr.statement} [${cr.kind}, verified by ${cr.independence}]`));
+      if (r.reviewer_role) console.log(c.dim(`    reviewed by: ${r.reviewer_role}`));
+    }
+    console.log(`\n${c.b('Workflow')}`);
+    for (const w of d.workflows) console.log(`  ${w.name}: ${w.stages.map((s) => `${s.key}${s.gate !== 'none' ? `[${s.gate}]` : ''}`).join(' -> ')}`);
+    console.log(`\n${c.b('Never autonomous')}: ${d.never_autonomous.join('; ') || '-'}`);
+    for (const x of [...e.errors, ...e.warnings, ...e.notes]) console.log(`${c.y('!')} ${x}`);
+    return;
+  }
+  throw new Error('Usage: aic teams [list|show <team>|new <key>|check [team|file]|capabilities]');
+}
+
 main().catch((e) => { console.error(c.r(String((e as Error).stack ?? e))); process.exit(1); });
-void path;

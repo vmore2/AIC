@@ -50,7 +50,10 @@ export const ConfigSchema = z.object({
   sandbox: z.object({ allow_unisolated_local: z.boolean().default(false) }).default({}),
   /** Where run workspaces and transcripts are stored (customer storage). */
   storage_path: z.string().default('.aic/storage'),
-  templates_path: z.string().default('templates/departments'),
+  /** The company's own custom teams (recommended teams ship with the platform). */
+  teams_path: z.string().default('teams'),
+  /** Extra Cedar policies (baseline forbids cannot be weakened). */
+  policies_path: z.string().default('policies'),
   /** Signs run credentials; supply via env in production. */
   credential_secret_env: z.string().default('AIC_CREDENTIAL_SECRET'),
 });
@@ -67,7 +70,8 @@ export function loadConfig(file = DEFAULT_CONFIG_FILE, baseDir = process.cwd()):
   if ('local_path' in cfg.database) cfg.database = { local_path: abs(cfg.database.local_path) };
   if (cfg.code_hosting.kind === 'local') cfg.code_hosting = { ...cfg.code_hosting, path: abs(cfg.code_hosting.path) };
   cfg.storage_path = abs(cfg.storage_path);
-  cfg.templates_path = abs(cfg.templates_path);
+  cfg.teams_path = abs(cfg.teams_path);
+  cfg.policies_path = abs(cfg.policies_path);
   const keys = new Set(cfg.models.profiles.map((p) => p.key));
   for (const [role, key] of Object.entries(cfg.models.assignments)) if (!keys.has(key)) throw new Error(`Model assignment for ${role} references unknown profile ${key}`);
   if (!keys.has(cfg.models.default)) throw new Error(`Default model profile ${cfg.models.default} is not defined`);

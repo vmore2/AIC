@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadDepartments, validateDepartment } from '../src/org/validate.js';
 import type { Department } from '../src/org/schema.js';
 
-const { departments, findings } = loadDepartments('templates/departments');
+const { departments, findings } = loadDepartments('templates/recommended');
 const byKey = (k: string) => structuredClone(departments.find((d) => d.key === k)!) as Department;
 const rules = (d: Department) => validateDepartment(d).filter((f) => f.level === 'error').map((f) => f.rule);
 const role = (d: Department, k: string) => d.roles.find((r) => r.key === k)!;
@@ -80,7 +80,7 @@ describe('architecture rules reject unsafe team designs', () => {
 
   it('work affecting individuals requires a human criterion', () => {
     const d = byKey('people_ops');
-    const r = role(d, 'people_ops_specialist');
+    const r = role(d, 'people_operations_specialist');
     r.affects_individuals = true;
     r.criteria_templates = r.criteria_templates.filter((c) => c.independence !== 'human');
     expect(rules(d)).toContain('individuals_human');

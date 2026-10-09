@@ -23,7 +23,7 @@ export async function createApp(config: Config, opts: { log?: (m: string) => voi
   const url = 'url_env' in config.database ? process.env[config.database.url_env] : undefined;
   if ('url_env' in config.database && !url) throw new Error(`Environment variable ${config.database.url_env} is not set`);
   const ledger = await Ledger.open({ url, localPath: 'local_path' in config.database ? config.database.local_path : undefined,
-    policyDir: path.join(path.dirname(config.templates_path), '..', 'policies'), clock: opts.clock });
+    policyDir: config.policies_path, clock: opts.clock });
   const host: CodeHost = config.code_hosting.kind === 'local'
     ? new LocalCodeHost(config.code_hosting.path)
     : new GitHubCodeHost(config.code_hosting.repo, config.code_hosting.token_env, config.code_hosting.base_branch);

@@ -35,6 +35,9 @@
   .msg { padding:10px 12px; border-radius:10px; max-width:80%; white-space:pre-wrap; }
   .msg.me { align-self:flex-end; background:var(--chip); }
   .msg.them { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+  label.chk { display:inline-block; color:var(--ink); font-size:13px; margin:2px 14px 2px 0; }
+  button[disabled] { opacity:.5; cursor:not-allowed; }
   pre { white-space:pre-wrap; background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--line); max-height:260px; overflow:auto; }
   .flag { color:var(--bad); font-weight:600; }
   @media (max-width: 640px) { header { flex-wrap:wrap; } main { padding:16px; } }
@@ -59,11 +62,11 @@ const api = async (p, opts = {}) => {
   return body;
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const views = { Overview: overview, Inbox: inboxView, Team: team, Talk: talk, Audit: audit };
+const views = { Overview: overview, Inbox: inboxView, Org: team, Teams: teamsView, 'Build a team': () => builder(), Talk: talk, Audit: audit };
 let current = 'Overview';
 const nav = document.getElementById('nav');
 function renderNav() { nav.innerHTML = Object.keys(views).map((k) => `<button class="${k === current ? 'active' : ''}" data-v="${k}">${k}</button>`).join(''); }
-nav.onclick = (e) => { const v = e.target.dataset.v; if (v) { current = v; renderNav(); refresh(); } };
+nav.onclick = (e) => { const v = e.target.dataset.v; if (v) { current = v; if (v === 'Build a team') draft = null; renderNav(); refresh(); } };
 const view = document.getElementById('view');
 async function refresh() {
   try { await views[current](); document.getElementById('fresh').textContent = 'updated ' + new Date().toLocaleTimeString(); }
@@ -153,7 +156,7 @@ async function team() {
   view.innerHTML = deps.map((d) => `<div class="card"><b>${esc(d.name)}</b> <span class="muted">default mode ${d.default_mode}</span>
     <table><tr><th>Employee</th><th>Category</th><th>Active</th><th>Accepted</th><th>Rework</th><th>Model</th></tr>
     ${d.employees.map((e) => `<tr><td>${esc(e.display_name)}</td><td>${e.category}</td><td>${e.active}</td><td>${e.accepted}</td><td>${e.reworkRate === null ? '—' : e.reworkRate + '%'}</td><td class="muted">${esc(e.model_profile)}</td></tr>`).join('')}</table></div>`).join('')
-    || '<div class="card">No departments hired yet. Run <code>aic hire &lt;department&gt;</code>.</div>';
+    || '<div class="card">No teams hired yet. Open <b>Teams</b> to hire one.</div>';
 }
 
 const chatLog = [];
@@ -182,7 +185,153 @@ document.getElementById('estop').onclick = async () => {
   await api('/api/emergency-stop', { method: 'POST', body: JSON.stringify({ reason: 'dashboard emergency stop' }) });
   document.getElementById('estop').textContent = 'STOPPED'; refresh();
 };
-renderNav(); refresh(); setInterval(() => { if (current !== 'Talk') refresh(); }, 4000);
+
+// ---------------------------------------------------------------- team catalog
+async function teamsView() {
+  const teams = await api('/api/catalog');
+  const card = (t) => `
+    <div class="card">
+      <div class="row"><b>${esc(t.name)}</b><span class="pill">${t.source === 'recommended' ? 'Recommended' : 'Custom'}</span>
+        ${t.format === 'team_spec' ? '<span class="pill">short spec</span>' : ''}${t.hired ? '<span class="pill ok">hired</span>' : ''}
+        ${t.errors.length ? `<span class="pill bad">${t.errors.length} error(s)</span>` : ''}<span class="spacer"></span>
+        <span class="muted">mode ${t.mode || '?'} · risk ${t.risk || '?'}</span></div>
+      <div class="muted" style="margin:6px 0">${esc(t.purpose)}</div>
+      <table><tr><th>Role</th><th>Type</th><th>Seats</th><th>Does</th></tr>
+        ${t.roles.map((r) => `<tr><td>${esc(r.title)}</td><td>${r.category}</td><td>${r.count}</td><td class="muted">${esc(r.does)}</td></tr>`).join('')}</table>
+      ${t.errors.map((x) => `<div class="bad">✖ ${esc(x)}</div>`).join('')}
+      <p>${t.hired ? '' : `<button class="act" ${t.errors.length ? 'disabled' : ''} onclick="hireTeam('${t.key}')">Hire</button>`}
+        <button class="sec" onclick="teamDetail('${t.key}')">Details</button>
+        ${t.format === 'team_spec' ? `<button class="sec" onclick="builder('${t.key}')">${t.source === 'custom' ? 'Edit' : 'Copy as custom team'}</button>` : ''}</p>
+    </div>`;
+  view.innerHTML = `<div class="card row"><b>Team catalog</b><span class="muted">Recommended teams ship with the platform; custom teams are yours.</span><span class="spacer"></span>
+      <button class="act" onclick="current='Build a team';renderNav();builder()">+ Build a team</button></div>` + teams.map(card).join('');
+}
+async function hireTeam(key) {
+  try { const r = await api(`/api/catalog/${key}/hire`, { method: 'POST', body: '{}' }); alertBox(`Hired ${r.employees.length} employees. Brief the lead in Talk.`); }
+  catch (e) { alertBox(e.message); return; }
+  teamsView();
+}
+async function teamDetail(key) {
+  const t = (await api('/api/catalog')).find((x) => x.key === key);
+  view.innerHTML = `<div class="card"><button class="sec" onclick="teamsView()">← Catalog</button><h3>${esc(t.name)}</h3><div class="muted">${esc(t.purpose)}</div>
+    <h4>Workflow</h4><div>${t.workflow.map((s) => `${s.key}${s.gate !== 'none' ? ` <span class="pill">${s.gate.replace('_', ' ')}</span>` : ''}`).join(' → ')}</div>
+    ${t.roles.map((r) => `<h4>${esc(r.title)} <span class="muted">(${r.category}, ${r.profile}, ×${r.count}, reports to ${esc(r.reportsTo)})</span></h4>
+      <div>${esc(r.does)}</div>
+      <div class="muted">Tools: ${r.tools.join(', ')}</div>
+      ${r.criteria.length ? `<div>Acceptance:<ul>${r.criteria.map((c) => `<li>${esc(c.statement)} <span class="muted">— ${c.kind}, verified by ${c.by}</span></li>`).join('')}</ul></div>` : ''}
+      ${r.reviewer ? `<div class="muted">Reviewed by ${r.reviewer}</div>` : ''}`).join('')}
+    <h4>Never autonomous</h4><div>${t.neverAutonomous.map(esc).join('; ') || '—'}</div>
+    ${[...t.warnings, ...t.notes].map((x) => `<div class="warn">! ${esc(x)}</div>`).join('')}</div>`;
+}
+
+// ---------------------------------------------------------------- team builder
+let draft = null;
+let caps = [];
+const blankRole = (o = {}) => ({ title: '', does: '', count: 1, type: 'member', works_with: ['documents'], reviews: [], document: '', sections: '', human_judges: '', affects_people: false, ...o });
+function toSpec(d) {
+  return {
+    team: d.team, name: d.name, purpose: d.purpose, mode: d.mode, risk: d.risk,
+    never_autonomous: d.never.split('\n').map((x) => x.trim()).filter(Boolean),
+    roles: d.roles.map((r) => {
+      const o = { title: r.title, does: r.does, count: Number(r.count) || 1 };
+      if (r.type === 'lead') o.lead = true;
+      if (r.type === 'qa') o.qa = true;
+      if (r.type === 'reviewer') o.reviews = r.reviews;
+      if (r.works_with.length) o.works_with = r.works_with;
+      if (r.document) o.delivers = [{ document: r.document, ...(r.sections ? { sections: r.sections.split(',').map((s) => s.trim()).filter(Boolean) } : {}) }];
+      if (r.human_judges) o.human_judges = r.human_judges;
+      if (r.affects_people) o.affects_people = true;
+      return o;
+    }),
+  };
+}
+function fromSpec(s) {
+  return {
+    team: s.team, name: s.name, purpose: s.purpose, mode: s.mode || 'plan_gates', risk: s.risk || 'standard', never: (s.never_autonomous || []).join('\n'),
+    roles: s.roles.map((r) => blankRole({
+      title: r.title, does: r.does, count: r.count || 1, type: r.lead ? 'lead' : r.qa ? 'qa' : (r.reviews || []).length ? 'reviewer' : 'member',
+      works_with: r.works_with || ['documents'], reviews: r.reviews || [], document: r.delivers?.find((x) => x.document)?.document || '',
+      sections: (r.delivers?.find((x) => x.document)?.sections || []).join(', '), human_judges: r.human_judges || '', affects_people: !!r.affects_people,
+    })),
+  };
+}
+async function builder(fromKey) {
+  if (!caps.length) caps = await api('/api/capabilities');
+  if (fromKey) { draft = fromSpec(await api(`/api/catalog/${fromKey}/spec`)); }
+  else if (!draft) draft = { team: '', name: '', purpose: '', mode: 'plan_gates', risk: 'standard', never: 'Anything sent outside the company',
+    roles: [blankRole({ type: 'lead', title: '', does: '' }), blankRole(), blankRole({ type: 'reviewer' })] };
+  renderBuilder();
+}
+function renderBuilder(result) {
+  const d = draft;
+  const titles = d.roles.map((r) => r.title).filter(Boolean);
+  view.innerHTML = `<div class="card">
+    <b>Build a team</b> <span class="muted">Describe the roles. The platform derives tools, acceptance checks, review chain, workflow, and safeguards.</span>
+    <div class="row" style="margin-top:10px"><div style="flex:2"><label>Team name</label><input id="b-name" value="${esc(d.name)}" placeholder="Growth Marketing"></div>
+      <div style="flex:1"><label>Key</label><input id="b-team" value="${esc(d.team)}" placeholder="growth_marketing"></div>
+      <div style="flex:1"><label>Oversight</label><select id="b-mode">${['autonomous', 'exceptions', 'milestones', 'plan_gates', 'supervised'].map((m) => `<option ${m === d.mode ? 'selected' : ''}>${m}</option>`).join('')}</select></div>
+      <div style="flex:1"><label>Risk</label><select id="b-risk">${['low', 'standard', 'high', 'critical'].map((m) => `<option ${m === d.risk ? 'selected' : ''}>${m}</option>`).join('')}</select></div></div>
+    <label>Purpose</label><textarea id="b-purpose" rows="2" placeholder="What this team is for and what good output looks like">${esc(d.purpose)}</textarea>
+    <label>Never autonomous (one per line)</label><textarea id="b-never" rows="2">${esc(d.never)}</textarea></div>
+    ${d.roles.map((r, i) => `<div class="card">
+      <div class="row"><div style="flex:2"><label>Role title</label><input data-i="${i}" data-f="title" value="${esc(r.title)}" placeholder="Content Strategist"></div>
+        <div style="flex:1"><label>Type</label><select data-i="${i}" data-f="type">${[['lead', 'Lead (plans, reports to CEO)'], ['member', 'Team member'], ['reviewer', 'Independent reviewer'], ['qa', 'QA (outside the chain)']].map(([v, l]) => `<option value="${v}" ${v === r.type ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div style="width:90px"><label>Seats</label><input type="number" min="1" max="10" data-i="${i}" data-f="count" value="${r.count}"></div>
+        <button class="sec" onclick="removeRole(${i})" title="Remove role">✕</button></div>
+      <label>What this role does</label><textarea rows="2" data-i="${i}" data-f="does" placeholder="One or two sentences">${esc(r.does)}</textarea>
+      ${r.type === 'reviewer' ? `<label>Reviews</label><div>${titles.filter((t) => t !== r.title).map((t) => `<label class="chk"><input type="checkbox" style="width:auto" data-i="${i}" data-f="reviews" value="${esc(t)}" ${r.reviews.includes(t) ? 'checked' : ''}> ${esc(t)}</label>`).join('') || '<span class="muted">Add role titles first</span>'}</div>` : ''}
+      <label>Works with</label><div>${caps.map((c) => `<label class="chk" title="${esc(c.label)}"><input type="checkbox" style="width:auto" data-i="${i}" data-f="works_with" value="${c.key}" ${r.works_with.includes(c.key) ? 'checked' : ''}> ${c.key}</label>`).join('')}</div>
+      ${r.type === 'member' || r.type === 'qa' ? `<div class="row"><div style="flex:1"><label>Delivers document (path)</label><input data-i="${i}" data-f="document" value="${esc(r.document)}" placeholder="growth/PLAN.md"></div>
+        <div style="flex:1"><label>Required sections (comma-separated)</label><input data-i="${i}" data-f="sections" value="${esc(r.sections)}" placeholder="Summary, Details, Open Questions"></div></div>
+        <div class="row"><div style="flex:2"><label>A human must accept this work (optional)</label><input data-i="${i}" data-f="human_judges" value="${esc(r.human_judges)}" placeholder="The CEO approves the messaging"></div>
+        <label class="chk" style="flex:1"><input type="checkbox" style="width:auto" data-i="${i}" data-f="affects_people" ${r.affects_people ? 'checked' : ''}> affects individuals (always human-decided)</label></div>` : ''}
+    </div>`).join('')}
+    <div class="card row"><button class="sec" onclick="addRole()">+ Add role</button><span class="spacer"></span>
+      <button class="sec" onclick="checkDraft()">Check</button><button class="act" onclick="saveDraft(false)">Save team</button><button class="act" onclick="saveDraft(true)">Save &amp; hire</button></div>
+    <div id="b-result">${result || ''}</div>`;
+  view.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('change', readField));
+  view.querySelectorAll('input[data-f], textarea[data-f]').forEach((el) => el.addEventListener('input', readField));
+  ['name', 'team', 'mode', 'risk', 'purpose', 'never'].forEach((f) => document.getElementById('b-' + f).addEventListener('input', (e) => {
+    draft[f] = e.target.value;
+    if (f === 'name' && !draft.teamTouched) { draft.team = e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); document.getElementById('b-team').value = draft.team; }
+    if (f === 'team') draft.teamTouched = true;
+  }));
+}
+function readField(e) {
+  const el = e.target; const r = draft.roles[Number(el.dataset.i)]; const f = el.dataset.f;
+  if (f === 'works_with' || f === 'reviews') r[f] = [...view.querySelectorAll(`[data-i="${el.dataset.i}"][data-f="${f}"]:checked`)].map((x) => x.value);
+  else if (f === 'affects_people') r[f] = el.checked;
+  else r[f] = el.value;
+  if (f === 'type' || (f === 'title' && e.type === 'change')) renderBuilder();
+}
+function addRole() { draft.roles.push(blankRole()); renderBuilder(); }
+function removeRole(i) { draft.roles.splice(i, 1); renderBuilder(); }
+function showResult(t, saved) {
+  const derived = t.roles.map((r) => `<li><b>${esc(r.title)}</b> <span class="muted">(${r.category}, ${r.profile})</span><div class="muted">tools: ${r.tools.join(', ')}</div>
+    ${r.criteria.map((c) => `<div>✓ ${esc(c.statement)} <span class="muted">— verified by ${c.by}</span></div>`).join('')}${r.reviewer ? `<div class="muted">reviewed by ${r.reviewer}</div>` : ''}</li>`).join('');
+  return `<div class="card">${saved ? `<div class="ok"><b>Saved.</b> ${esc(saved)}</div>` : ''}
+    ${t.errors.length ? t.errors.map((x) => `<div class="bad">✖ ${esc(x)}</div>`).join('') : '<div class="ok">✔ Passes all architecture rules.</div>'}
+    ${[...t.warnings, ...t.notes].map((x) => `<div class="warn">! ${esc(x)}</div>`).join('')}
+    ${t.workflow.length ? `<h4>Workflow</h4><div>${t.workflow.map((s) => `${s.key}${s.gate !== 'none' ? ` <span class="pill">${s.gate.replace('_', ' ')}</span>` : ''}`).join(' → ')}</div>` : ''}
+    ${derived ? `<h4>What the platform derived</h4><ul>${derived}</ul>` : ''}</div>`;
+}
+async function checkDraft() {
+  try { const t = await api('/api/teams/check', { method: 'POST', body: JSON.stringify({ spec: toSpec(draft) }) }); renderBuilder(showResult(t)); }
+  catch (e) { renderBuilder(`<div class="card bad">${esc(e.message)}</div>`); }
+}
+async function saveDraft(hire) {
+  try {
+    const r = await api('/api/teams', { method: 'POST', body: JSON.stringify({ spec: toSpec(draft) }) });
+    let note = r.saved;
+    if (hire) { const h = await api(`/api/catalog/${r.team.key}/hire`, { method: 'POST', body: '{}' }); note += ` — hired ${h.employees.length} employees`; }
+    renderBuilder(showResult(r.team, note));
+  } catch (e) {
+    const t = await api('/api/teams/check', { method: 'POST', body: JSON.stringify({ spec: toSpec(draft) }) }).catch(() => null);
+    renderBuilder(`<div class="card bad">${esc(e.message)}</div>` + (t ? showResult(t) : ''));
+  }
+}
+
+renderNav(); refresh(); setInterval(() => { if (['Overview', 'Inbox', 'Org', 'Audit'].includes(current)) refresh(); }, 4000);
 </script>
 </body>
 </html>

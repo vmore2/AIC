@@ -6,6 +6,7 @@ import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { DepartmentSchema, type Department, type Role } from './schema.js';
 import { TOOLS_BY_NAME, toolTraits } from './toolCatalog.js';
+import { compileTeam, isTeamSpec } from './teamSpec.js';
 
 export interface Finding { level: 'error' | 'warning'; department: string; rule: string; message: string }
 
@@ -16,6 +17,10 @@ export const MAX_SPAN = 8;
 
 export function loadDepartmentFile(file: string): { department?: Department; findings: Finding[] } {
   const raw = parseYaml(readFileSync(file, 'utf8'));
+  if (isTeamSpec(raw)) {
+    const r = compileTeam(raw);
+    return { department: r.department, findings: r.errors.map((m) => ({ level: 'error' as const, department: path.basename(file), rule: 'team_spec', message: m })) };
+  }
   const parsed = DepartmentSchema.safeParse(raw);
   if (!parsed.success) {
     return { findings: parsed.error.issues.map((i) => ({ level: 'error', department: path.basename(file), rule: 'schema', message: `${i.path.join('.')}: ${i.message}` })) };

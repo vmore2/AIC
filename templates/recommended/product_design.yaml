@@ -1,0 +1,45 @@
+# Recommended team: Product Design. Written in the short "team spec" format —
+# list the roles; the platform derives tools, criteria, review chain, workflows, and safeguards.
+team: product_design
+name: Product Design
+version: 2
+recommended: true
+publisher: The AI Company
+purpose: >
+  Turn product goals into user flows, screen designs, and interface copy that meet accessibility and
+  brand standards. Structure and accessibility are checked by the platform; visual taste is judged by the CEO.
+mode: plan_gates
+risk: standard
+
+roles:
+  - title: Design Lead
+    lead: true
+    does: Turns the CEO's product goals into a design brief and plan, coordinates designers and writers, and presents options with trade-offs.
+    works_with: [documents, design_files]
+
+  - title: Product Designer
+    count: 2
+    does: Produces user flows and screen designs that follow the design system, with the rationale and open questions written down.
+    works_with: [documents, design_files]
+    delivers:
+      - document: design/SPEC.md
+        sections: [Goals, Flows, Screens, Accessibility, Open Questions]
+    human_judges: The CEO accepts the visual direction
+
+  - title: UX Writer
+    does: Writes clear interface copy that is consistent with the product glossary and appropriate for the audience.
+    delivers:
+      - document: copy/COPY.md
+        sections: [Screens, Copy, Terminology]
+
+  - title: Accessibility Reviewer
+    reviews: [Product Designer, UX Writer]
+    does: Independently reviews designs and copy for accessibility, consistency, and fit with the brief, citing the exact screen or line.
+    works_with: [design_files]
+
+kpis:
+  - Verified completion rate
+  - Accessibility findings per screen
+  - Revision rounds to CEO acceptance
+never_autonomous:
+  - Publishing brand-defining visual changes

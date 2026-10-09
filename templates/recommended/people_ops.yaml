@@ -1,0 +1,45 @@
+# Recommended team: People Operations (HR). Short "team spec" format.
+# HR work that affects individuals is always decided by a human (GDPR Art. 22; the EU AI Act
+# treats employment uses as high-risk), so this team runs Supervised with a high risk floor.
+team: people_ops
+name: People Operations (HR)
+version: 2
+recommended: true
+publisher: The AI Company
+purpose: >
+  Run defined HR workflows: job descriptions, interview logistics, onboarding plans, and policy answers
+  from the approved handbook. The team never screens, ranks, or decides about individuals.
+mode: supervised
+risk: high
+
+roles:
+  - title: People Operations Lead
+    lead: true
+    does: Plans hiring logistics, onboarding, and policy work, and routes every decision that affects a person to a human.
+
+  - title: People Operations Specialist
+    does: Drafts job descriptions, onboarding plans, and handbook-grounded policy answers in inclusive language, citing the handbook.
+    works_with: [documents, email_drafts]
+    delivers:
+      - document: people/DOC.md
+        sections: [Purpose, Content, Policy References]
+    human_judges: A human HR owner approves the document
+    affects_people: true
+
+  - title: Recruiting Coordinator
+    does: Schedules interviews and sends approved logistics messages from templates; never evaluates or ranks candidates.
+    works_with: [calendar, send_email]
+    delivers:
+      - document: people/SCHEDULE.md
+        sections: [Candidates, Interviews, Messages Sent]
+    human_judges: A human HR owner approves candidate communications
+
+  - title: HR Compliance Reviewer
+    reviews: [People Operations Specialist, Recruiting Coordinator]
+    does: Independently reviews HR documents and messages for bias, legal-risk language, and consistency with the handbook.
+
+never_autonomous:
+  - Screening or ranking candidates
+  - Compensation decisions
+  - Terminations
+  - Updating HR records
