@@ -1,0 +1,113 @@
+key: marketing
+version: 1
+name: Marketing
+purpose: >
+  Plan campaigns and produce on-brand content. Drafting is autonomous; anything published externally is an
+  approval-gated action with the exact content shown to the approver.
+default_mode: M3
+risk_floor: R1
+head: marketing_lead
+
+roles:
+  - key: marketing_lead
+    version: 1
+    title: Marketing Lead
+    category: manager
+    charter: >
+      Turn CEO goals into a campaign plan with audiences, messages, channels, and measurable success criteria;
+      coordinate writers and the channel operator.
+    responsibilities:
+      - Propose campaign plans with budgets and measurable goals
+      - Assign content and channel work
+      - Request CEO approval for anything external
+    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
+            ledger.ask_question, ledger.raise_blocker, ledger.submit_work, ledger.post_update, ledger.propose_directive,
+            knowledge.search, analytics.query, fs.read, fs.write, fs.list]
+    task_kinds: [planning, decision]
+    can_manage: true
+    decision_authority: [content_calendar, channel_mix_within_budget]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 60, max_cost_usd: 8, max_wall_minutes: 45 }, per_day_usd: 60 }
+    escalation_path: [ceo]
+    prompt: >
+      You are the Marketing Lead. Plan campaigns with measurable goals. Nothing is published without approval.
+
+  - key: content_writer
+    version: 1
+    title: Content Writer
+    category: specialist
+    charter: >
+      Write on-brand content drafts (posts, emails, landing copy) from the approved brief, with every factual
+      claim flagged for substantiation.
+    responsibilities:
+      - Draft content to the brief and brand guide
+      - List factual claims that need substantiation
+    tools: [ledger.get_task_contract, ledger.submit_work, ledger.raise_blocker, ledger.ask_question, knowledge.search, email.draft, fs.read, fs.write, fs.list]
+    task_kinds: [implementation]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 50, max_cost_usd: 6, max_wall_minutes: 45 }, per_day_usd: 50 }
+    criteria_templates:
+      - { kind: deterministic, statement: "Draft has Audience, Message, Body, Claims to Substantiate sections", independence: platform,
+          check: { type: markdown_sections, path: "content/DRAFT.md", sections: ["Audience", "Message", "Body", "Claims to Substantiate"] } }
+      - { kind: deterministic, statement: "Draft contains no placeholder text", independence: platform,
+          check: { type: no_placeholder_text, path: "content/DRAFT.md" } }
+      - { kind: rubric_review, statement: "Draft matches the brand voice and the approved brief", independence: different_lineage_model }
+    reviewer_role: brand_reviewer
+    escalation_path: [manager, ceo]
+    prompt: >
+      You are a Content Writer. Follow the brief and brand guide. List every factual claim under
+      "Claims to Substantiate".
+
+  - key: channel_operator
+    version: 1
+    title: Channel Operator
+    category: specialist
+    charter: >
+      Schedule and publish approved content to external channels and report performance. Publishing is always
+      an approval-gated action bound to the exact approved content.
+    responsibilities:
+      - Publish only approved content, exactly as approved
+      - Report channel performance from analytics
+    tools: [ledger.get_task_contract, ledger.submit_work, ledger.raise_blocker, social.publish, analytics.query, fs.read, fs.list]
+    task_kinds: [operation]
+    rule_of_two_profile: communicator
+    budget: { per_run: { max_steps: 30, max_cost_usd: 4, max_wall_minutes: 30 }, per_day_usd: 30 }
+    criteria_templates:
+      - { kind: external_reconciliation, statement: "The published post exists on the channel with the approved content", independence: external_system }
+    escalation_path: [manager, ceo]
+    prompt: >
+      You are the Channel Operator. Publish only what has been approved, exactly as approved.
+
+  - key: brand_reviewer
+    version: 1
+    title: Brand & Claims Reviewer
+    category: reviewer
+    charter: >
+      Independently review content for brand voice, accuracy of claims, and required disclaimers, citing the exact lines.
+    responsibilities:
+      - Check brand voice and terminology
+      - Flag unsubstantiated or risky claims
+    tools: [ledger.get_task_contract, review.record_verdict, knowledge.search, fs.read, fs.list]
+    task_kinds: [review]
+    rule_of_two_profile: reviewer
+    budget: { per_run: { max_steps: 30, max_cost_usd: 4, max_wall_minutes: 30 }, per_day_usd: 30 }
+    escalation_path: [ceo]
+    prompt: >
+      You are an independent Brand & Claims Reviewer. Cite the exact line for every finding.
+
+structure:
+  - { role: marketing_lead, count: 1, reports_to: ceo }
+  - { role: content_writer, count: 2, reports_to: marketing_lead }
+  - { role: channel_operator, count: 1, reports_to: marketing_lead }
+  - { role: brand_reviewer, count: 1, reports_to: ceo }
+
+workflows:
+  - key: campaign
+    name: Campaign
+    stages:
+      - { key: plan, description: "Lead proposes campaign plan", owner_role: marketing_lead, task_kind: planning, gate: ceo_approval }
+      - { key: draft, description: "Writers draft content", owner_role: content_writer, task_kind: implementation, gate: independent_review }
+      - { key: publish, description: "Operator publishes approved content (A5, approval-gated)", owner_role: channel_operator, task_kind: operation, gate: ceo_approval }
+
+kpis: [Verified on-brief drafts, Claims flagged before publication, Campaign goal attainment]
+never_autonomous: [Publishing externally, Paid spend changes]

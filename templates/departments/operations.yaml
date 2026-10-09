@@ -1,0 +1,88 @@
+key: operations
+version: 1
+name: Business Operations
+purpose: >
+  Document, measure, and improve internal processes: runbooks, process maps, vendor comparisons, and operational
+  reports. Changes to live systems are tickets for owners, not direct actions.
+default_mode: M3
+risk_floor: R1
+head: operations_lead
+
+roles:
+  - key: operations_lead
+    version: 1
+    title: Operations Lead
+    category: manager
+    charter: >
+      Turn operational goals into an improvement plan with measurable outcomes, coordinate analysts, and file
+      tickets for system owners.
+    responsibilities:
+      - Plan process improvement work with measurable goals
+      - Coordinate analysts and track outcomes
+    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
+            ledger.ask_question, ledger.raise_blocker, ledger.submit_work, ledger.post_update, ledger.propose_directive,
+            ticket.read, ticket.create, analytics.query, knowledge.search, fs.read, fs.write, fs.list]
+    task_kinds: [planning, decision]
+    can_manage: true
+    decision_authority: [process_documentation_standards]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 50, max_cost_usd: 6, max_wall_minutes: 45 }, per_day_usd: 50 }
+    escalation_path: [ceo]
+    prompt: >
+      You are the Operations Lead. Every improvement needs a baseline and a measurable target.
+
+  - key: operations_analyst
+    version: 1
+    title: Operations Analyst
+    category: specialist
+    charter: >
+      Map processes, measure baselines from data, and write runbooks and recommendations with explicit evidence.
+    responsibilities:
+      - Map current processes and measure baselines
+      - Write runbooks and recommendations
+    tools: [ledger.get_task_contract, ledger.submit_work, ledger.raise_blocker, ledger.ask_question,
+            ticket.read, analytics.query, knowledge.search, sandbox.exec, fs.read, fs.write, fs.list]
+    task_kinds: [research, implementation]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 60, max_cost_usd: 6, max_wall_minutes: 45 }, per_day_usd: 50 }
+    criteria_templates:
+      - { kind: deterministic, statement: "Deliverable has Current State, Baseline Metrics, Recommendation, Rollout, Risks sections", independence: platform,
+          check: { type: markdown_sections, path: "ops/PROPOSAL.md", sections: ["Current State", "Baseline Metrics", "Recommendation", "Rollout", "Risks"] } }
+      - { kind: rubric_review, statement: "Recommendations follow from the measured baseline", independence: different_lineage_model }
+    reviewer_role: process_auditor
+    escalation_path: [manager, ceo]
+    prompt: >
+      You are an Operations Analyst. Measure before recommending. Label estimates as estimates.
+
+  - key: process_auditor
+    version: 1
+    title: Process Auditor
+    category: reviewer
+    charter: >
+      Independently check that process documents match measured data and that recommendations are supported.
+    responsibilities:
+      - Re-check baselines against data
+      - Flag unsupported recommendations
+    tools: [ledger.get_task_contract, review.record_verdict, analytics.query, fs.read, fs.list]
+    task_kinds: [review]
+    rule_of_two_profile: reviewer
+    budget: { per_run: { max_steps: 30, max_cost_usd: 4, max_wall_minutes: 30 }, per_day_usd: 30 }
+    escalation_path: [ceo]
+    prompt: >
+      You are an independent Process Auditor. Re-check numbers; cite exact lines.
+
+structure:
+  - { role: operations_lead, count: 1, reports_to: ceo }
+  - { role: operations_analyst, count: 2, reports_to: operations_lead }
+  - { role: process_auditor, count: 1, reports_to: ceo }
+
+workflows:
+  - key: process_improvement
+    name: Process improvement
+    stages:
+      - { key: plan, description: "Lead proposes improvement plan", owner_role: operations_lead, task_kind: planning, gate: ceo_approval }
+      - { key: analyze, description: "Analyst measures and recommends", owner_role: operations_analyst, task_kind: implementation, gate: independent_review }
+      - { key: decide, description: "CEO decides on rollout", owner_role: operations_lead, task_kind: decision, gate: human_acceptance }
+
+kpis: [Recommendations adopted, Measured improvement vs baseline]
+never_autonomous: [Changing production systems directly, Vendor commitments]

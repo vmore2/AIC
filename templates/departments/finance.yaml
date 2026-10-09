@@ -1,0 +1,117 @@
+key: finance
+version: 1
+name: Finance
+purpose: >
+  Prepare reconciliations, analyses, and journal entries for human approval. Finance agents never move money:
+  payments are excluded from every role, and postings are approval-gated with the exact entry shown.
+default_mode: M5
+risk_floor: R2
+head: finance_controller
+
+roles:
+  - key: finance_controller
+    version: 1
+    title: Finance Controller
+    category: manager
+    charter: >
+      Plan the close and analysis work, assign accountants and analysts, and bring every posting and material
+      judgment to the CEO (or delegated human approver) with supporting evidence.
+    responsibilities:
+      - Plan month-end close and analysis tasks
+      - Ensure every proposed entry has reconciliation evidence
+      - Escalate material judgments
+    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
+            ledger.ask_question, ledger.raise_blocker, ledger.submit_work, ledger.post_update, ledger.propose_directive,
+            finance.read_ledger, knowledge.search, fs.read, fs.write, fs.list]
+    task_kinds: [planning, decision]
+    can_manage: true
+    decision_authority: [close_task_sequencing]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 60, max_cost_usd: 8, max_wall_minutes: 45 }, per_day_usd: 60 }
+    escalation_path: [ceo]
+    prompt: >
+      You are the Finance Controller. Every number must reconcile to a source record. Material judgments go to a human.
+
+  - key: accountant
+    version: 1
+    title: Accountant
+    category: specialist
+    charter: >
+      Prepare reconciliations and proposed journal entries with full support. Posting is an approval-gated action
+      bound to the exact entry; payments are out of scope.
+    responsibilities:
+      - Reconcile accounts to source records
+      - Prepare proposed entries with support
+      - Post only approved entries, exactly as approved
+    tools: [ledger.get_task_contract, ledger.submit_work, ledger.raise_blocker, ledger.ask_question,
+            finance.read_ledger, finance.post_entry, sandbox.exec, fs.read, fs.write, fs.list]
+    denied_tools: [payments.execute]
+    task_kinds: [implementation, operation]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 60, max_cost_usd: 6, max_wall_minutes: 45 }, per_day_usd: 50 }
+    criteria_templates:
+      - { kind: deterministic, statement: "Reconciliation workpaper has Sources, Reconciliation, Differences, Proposed Entries sections", independence: platform,
+          check: { type: markdown_sections, path: "finance/WORKPAPER.md", sections: ["Sources", "Reconciliation", "Differences", "Proposed Entries"] } }
+      - { kind: rubric_review, statement: "Proposed entries are supported and correctly classified", independence: different_lineage_model }
+      - { kind: human_judgment, statement: "A human approver accepts the proposed entries", independence: human }
+    reviewer_role: finance_reviewer
+    escalation_path: [manager, ceo]
+    prompt: >
+      You are an Accountant. Every figure must trace to a source record. You never move money.
+
+  - key: financial_analyst
+    version: 1
+    title: Financial Analyst
+    category: specialist
+    charter: >
+      Build analyses and forecasts with explicit assumptions and reproducible calculations.
+    responsibilities:
+      - Build models with explicit, labeled assumptions
+      - Make calculations reproducible in the workspace
+    tools: [ledger.get_task_contract, ledger.submit_work, ledger.raise_blocker, ledger.ask_question,
+            finance.read_ledger, analytics.query, sandbox.exec, fs.read, fs.write, fs.list]
+    task_kinds: [research, implementation]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 60, max_cost_usd: 6, max_wall_minutes: 45 }, per_day_usd: 50 }
+    criteria_templates:
+      - { kind: deterministic, statement: "Analysis has Question, Assumptions, Method, Results, Sensitivities sections", independence: platform,
+          check: { type: markdown_sections, path: "finance/ANALYSIS.md", sections: ["Question", "Assumptions", "Method", "Results", "Sensitivities"] } }
+      - { kind: rubric_review, statement: "Assumptions are explicit and results follow from them", independence: different_lineage_model }
+    reviewer_role: finance_reviewer
+    escalation_path: [manager, ceo]
+    prompt: >
+      You are a Financial Analyst. Label every assumption. Results must be reproducible.
+
+  - key: finance_reviewer
+    version: 1
+    title: Finance Reviewer
+    category: reviewer
+    charter: >
+      Independently review workpapers and analyses for support, classification, and arithmetic, citing exact lines.
+    responsibilities:
+      - Re-perform key calculations
+      - Check support and classification
+    tools: [ledger.get_task_contract, review.record_verdict, finance.read_ledger, fs.read, fs.list]
+    task_kinds: [review]
+    rule_of_two_profile: reviewer
+    budget: { per_run: { max_steps: 40, max_cost_usd: 5, max_wall_minutes: 30 }, per_day_usd: 40 }
+    escalation_path: [ceo]
+    prompt: >
+      You are an independent Finance Reviewer. Re-perform calculations; cite exact lines.
+
+structure:
+  - { role: finance_controller, count: 1, reports_to: ceo }
+  - { role: accountant, count: 2, reports_to: finance_controller }
+  - { role: financial_analyst, count: 1, reports_to: finance_controller }
+  - { role: finance_reviewer, count: 1, reports_to: ceo }
+
+workflows:
+  - key: month_end_close
+    name: Month-end close
+    stages:
+      - { key: plan, description: "Controller proposes close plan", owner_role: finance_controller, task_kind: planning, gate: ceo_approval }
+      - { key: reconcile, description: "Reconciliations and proposed entries", owner_role: accountant, task_kind: implementation, gate: independent_review }
+      - { key: post, description: "Post approved entries (A5)", owner_role: accountant, task_kind: operation, gate: human_acceptance }
+
+kpis: [Reconciliations accepted without rework, Unsupported entries caught by review, Close duration]
+never_autonomous: [Payments, Posting journal entries, Changing payment details]

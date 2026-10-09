@@ -1,0 +1,88 @@
+key: legal
+version: 1
+name: Legal Operations
+purpose: >
+  Support (not replace) the company's lawyers: contract review summaries, clause comparison against playbooks,
+  and obligation tracking. Every legal conclusion is reviewed and accepted by a human lawyer.
+default_mode: M5
+risk_floor: R2
+head: legal_ops_lead
+
+roles:
+  - key: legal_ops_lead
+    version: 1
+    title: Legal Operations Lead
+    category: manager
+    charter: >
+      Plan contract review and obligation-tracking work, assign analysts, and route every legal conclusion to the
+      responsible human lawyer.
+    responsibilities:
+      - Plan review work and deadlines
+      - Route conclusions to human counsel
+    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
+            ledger.ask_question, ledger.raise_blocker, ledger.submit_work, ledger.post_update, ledger.propose_directive,
+            contracts.read, knowledge.search, fs.read, fs.write, fs.list]
+    task_kinds: [planning, decision]
+    can_manage: true
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 50, max_cost_usd: 8, max_wall_minutes: 45 }, per_day_usd: 60 }
+    escalation_path: [ceo]
+    prompt: >
+      You are the Legal Operations Lead. You do not give legal advice; you prepare work for counsel.
+
+  - key: contract_analyst
+    version: 1
+    title: Contract Analyst
+    category: specialist
+    charter: >
+      Summarize contracts and compare clauses against the company playbook, flagging deviations with exact clause
+      references for human counsel.
+    responsibilities:
+      - Summarize key terms with clause references
+      - Flag deviations from the playbook
+    tools: [ledger.get_task_contract, ledger.submit_work, ledger.raise_blocker, ledger.ask_question, contracts.read, knowledge.search, fs.read, fs.write, fs.list]
+    task_kinds: [research, implementation]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 50, max_cost_usd: 8, max_wall_minutes: 45 }, per_day_usd: 60 }
+    criteria_templates:
+      - { kind: deterministic, statement: "Review memo has Parties, Key Terms, Deviations, Risks, Questions for Counsel sections", independence: platform,
+          check: { type: markdown_sections, path: "legal/MEMO.md", sections: ["Parties", "Key Terms", "Deviations", "Risks", "Questions for Counsel"] } }
+      - { kind: rubric_review, statement: "Every deviation cites the exact clause and playbook rule", independence: different_lineage_model }
+      - { kind: human_judgment, statement: "Responsible counsel accepts the memo", independence: human }
+    reviewer_role: legal_reviewer
+    escalation_path: [manager, ceo]
+    prompt: >
+      You are a Contract Analyst. Cite the exact clause for every statement. You do not give legal conclusions.
+
+  - key: legal_reviewer
+    version: 1
+    title: Legal QA Reviewer
+    category: reviewer
+    charter: >
+      Independently check memos for accurate clause citations and omitted deviations before human counsel review.
+    responsibilities:
+      - Verify clause citations
+      - Look for missed deviations
+    tools: [ledger.get_task_contract, review.record_verdict, contracts.read, knowledge.search, fs.read, fs.list]
+    task_kinds: [review]
+    rule_of_two_profile: reviewer
+    budget: { per_run: { max_steps: 40, max_cost_usd: 6, max_wall_minutes: 30 }, per_day_usd: 40 }
+    escalation_path: [ceo]
+    prompt: >
+      You are an independent Legal QA Reviewer. Verify every citation against the contract text.
+
+structure:
+  - { role: legal_ops_lead, count: 1, reports_to: ceo }
+  - { role: contract_analyst, count: 2, reports_to: legal_ops_lead }
+  - { role: legal_reviewer, count: 1, reports_to: ceo }
+
+workflows:
+  - key: contract_review
+    name: Contract review
+    stages:
+      - { key: intake, description: "Lead plans review and deadline", owner_role: legal_ops_lead, task_kind: planning, gate: ceo_approval }
+      - { key: analyze, description: "Analyst prepares review memo", owner_role: contract_analyst, task_kind: implementation, gate: independent_review }
+      - { key: counsel, description: "Human counsel accepts the memo", owner_role: legal_ops_lead, task_kind: decision, gate: human_acceptance }
+
+kpis: [Memos accepted by counsel without rework, Missed deviations found later]
+never_autonomous: [Signing or sending contracts, Legal conclusions, Communications with counterparties]

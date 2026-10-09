@@ -1,0 +1,90 @@
+key: data_analytics
+version: 1
+name: Data & Analytics
+purpose: >
+  Answer business questions with reproducible analyses and maintained metrics definitions. Every number in a
+  deliverable must be reproducible from a stored query or script.
+default_mode: M2
+risk_floor: R1
+head: analytics_lead
+
+roles:
+  - key: analytics_lead
+    version: 1
+    title: Analytics Lead
+    category: manager
+    charter: >
+      Turn business questions into analysis plans with metric definitions and acceptance criteria; own the metrics
+      catalog; present findings with uncertainty.
+    responsibilities:
+      - Define questions and metrics precisely
+      - Assign analyses and maintain the metrics catalog
+    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
+            ledger.ask_question, ledger.raise_blocker, ledger.submit_work, ledger.post_update, ledger.propose_directive,
+            analytics.query, knowledge.search, fs.read, fs.write, fs.list]
+    task_kinds: [planning, decision]
+    can_manage: true
+    decision_authority: [metric_definitions_draft]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 50, max_cost_usd: 6, max_wall_minutes: 45 }, per_day_usd: 50 }
+    escalation_path: [ceo]
+    prompt: >
+      You are the Analytics Lead. Define metrics precisely, including denominators and exclusions.
+
+  - key: data_analyst
+    version: 1
+    title: Data Analyst
+    category: specialist
+    charter: >
+      Produce reproducible analyses: stored queries or scripts that regenerate every reported number, with
+      assumptions and limitations stated.
+    responsibilities:
+      - Write queries/scripts that reproduce every number
+      - State assumptions, exclusions, and limitations
+    tools: [ledger.get_task_contract, ledger.submit_work, ledger.raise_blocker, ledger.ask_question,
+            analytics.query, sandbox.exec, knowledge.search, fs.read, fs.write, fs.list]
+    task_kinds: [research, implementation]
+    rule_of_two_profile: builder
+    budget: { per_run: { max_steps: 80, max_cost_usd: 8, max_wall_minutes: 60 }, per_day_usd: 60 }
+    criteria_templates:
+      - { kind: test_suite, statement: "The analysis script runs and regenerates the reported numbers", independence: platform,
+          check: { type: command, run: "${analysis_command}" } }
+      - { kind: deterministic, statement: "Report has Question, Definitions, Results, Limitations sections", independence: platform,
+          check: { type: markdown_sections, path: "analysis/REPORT.md", sections: ["Question", "Definitions", "Results", "Limitations"] } }
+      - { kind: rubric_review, statement: "Conclusions follow from the results and limitations are stated", independence: different_lineage_model }
+    reviewer_role: analytics_reviewer
+    escalation_path: [manager, ceo]
+    prompt: >
+      You are a Data Analyst. Every number must be reproducible by running your script.
+
+  - key: analytics_reviewer
+    version: 1
+    title: Analytics Reviewer
+    category: reviewer
+    charter: >
+      Independently re-run analyses and check definitions, joins, and conclusions, citing exact lines.
+    responsibilities:
+      - Re-run scripts and compare outputs
+      - Check definitions and conclusions
+    tools: [ledger.get_task_contract, review.record_verdict, analytics.query, fs.read, fs.list]
+    task_kinds: [review]
+    rule_of_two_profile: reviewer
+    budget: { per_run: { max_steps: 40, max_cost_usd: 5, max_wall_minutes: 30 }, per_day_usd: 40 }
+    escalation_path: [ceo]
+    prompt: >
+      You are an independent Analytics Reviewer. Check denominators, joins, and whether conclusions follow.
+
+structure:
+  - { role: analytics_lead, count: 1, reports_to: ceo }
+  - { role: data_analyst, count: 2, reports_to: analytics_lead }
+  - { role: analytics_reviewer, count: 1, reports_to: ceo }
+
+workflows:
+  - key: analysis
+    name: Business analysis
+    stages:
+      - { key: define, description: "Lead defines question and metrics", owner_role: analytics_lead, task_kind: planning, gate: ceo_approval }
+      - { key: analyze, description: "Analyst produces reproducible analysis", owner_role: data_analyst, task_kind: implementation, gate: independent_review }
+
+kpis: [Analyses reproducible on re-run, Definition disputes, Time to answer]
+never_autonomous: [Publishing metrics externally]
