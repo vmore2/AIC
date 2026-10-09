@@ -179,7 +179,7 @@ CEO ⇄ Team Lead (conversation) → proposal (directive) → CEO confirms (hash
 ## Tests
 
 ```bash
-npm test          # 72 tests: property-based state machine, ledger invariants, gateway red-team, team specs,
+npm test          # 75 tests (Docker tests run when Docker is available): property-based state machine, ledger invariants, gateway red-team, team specs,
                   # requirement changes, model adapters, Docker sandbox posture, conversations, end-to-end
 npm run typecheck
 ```
@@ -191,11 +191,17 @@ transition engine, Cedar authorization, verification pipeline, orchestration, co
 CLI and dashboard, all exercised end to end by tests.
 
 Known gaps, deliberately documented:
-- **Sandbox:** `sandbox: { kind: docker }` runs every agent command in a locked-down container on the
-  company's own Docker. The container has no network, no capabilities, a read-only root, a non-root
-  user, and resource limits. Its security settings are unit-tested; a live container run has not yet
-  been exercised here because the Docker daemon wasn't running. `kind: local` is unisolated and for
-  evaluation only. MicroVM/gVisor sandboxes plug into the same `SandboxPort`.
+- **Sandbox:** `sandbox: { kind: docker }` runs every agent command, and every platform verification,
+  in a fresh container on the company's own Docker. Verified live in tests:
+  - no network;
+  - non-root user and a read-only root filesystem;
+  - no Linux capabilities;
+  - only the run's workspace is writable, and host secrets are absent;
+  - PID, memory, and CPU limits and timeouts are enforced;
+  - a full objective runs with all tests inside containers.
+
+  `kind: local` is unisolated and for evaluation only. MicroVM/gVisor sandboxes plug into the same
+  `SandboxPort`.
 - **Connector tools** (GitHub PRs, email, CRM, design tools, …) are declared in the tool catalog with risk
   classes, but beyond git push/merge they need customer-installed connectors. Uninstalled connectors are refused.
 - **Single orchestrator process per company.** Leases, fencing, and drift repair make crashes safe, but
