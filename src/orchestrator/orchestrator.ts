@@ -7,7 +7,8 @@ import { SYSTEM } from '../domain/types.js';
 import { DomainError, type StoredEvent } from '../ledger/engine.js';
 import type { CommandInput, CommandName, CommandOutput, Ledger } from '../ledger/ledger.js';
 import { getEmployee, getRun, getTask } from '../ledger/store.js';
-import type { Workspaces } from '../execution/codeHost.js';
+import { GitHubCodeHost, type Workspaces } from '../execution/codeHost.js';
+import { GitHubError, type PullRequest } from '../execution/github.js';
 import type { SandboxPort } from '../execution/sandbox.js';
 import { runAgent, type RunOutcome } from '../runtime/agent.js';
 import { buildReviewContext, buildTaskContract } from '../runtime/context.js';
@@ -247,6 +248,7 @@ export class Orchestrator {
       await this.cmd('recordActionOutcome', { actionId, status: 'failed', detail: 'Integration branch changed since approval; approval is bound to the reviewed commit.' }, `release:${approvalId}:outcome`);
       return;
     }
+    if (host instanceof GitHubCodeHost) { await this.releaseViaGitHub(host, objectiveId, sha, approvalId, actionId); return; }
     const { git } = await import('../execution/codeHost.js');
     const dir = path.join(this.d.storageDir, 'workspaces', 'release', objectiveId);
     const { rmSync } = await import('node:fs');
@@ -262,6 +264,53 @@ export class Orchestrator {
     } catch (e) {
       await this.cmd('recordActionOutcome', { actionId, status: 'failed', detail: (e as Error).message.slice(0, 300) }, `release:${approvalId}:outcome`);
     }
+  }
+
+  /** GitHub release: open (or reuse) a PR integration → base, then merge pinned to the approved commit. */
+  private async releaseViaGitHub(host: GitHubCodeHost, objectiveId: string, sha: string, approvalId: string, actionId: string) {
+    const out = (status: 'succeeded' | 'failed' | 'unknown', detail?: string, externalRef?: string) =>
+      this.cmd('recordActionOutcome', { actionId, status, detail, externalRef, reconciled: false }, `release:${approvalId}:outcome:${status}`);
+    let pr: PullRequest | null = null;
+    try {
+      const gh = host.api();
+      pr = await gh.ensurePullRequest(this.d.workspaces.integrationBranch(objectiveId), host.baseBranch, `Release: ${await this.objectiveTitle(objectiveId)}`, await this.releaseSummary(objectiveId, sha, approvalId));
+      if (pr.head.sha !== sha) { await out('failed', `PR head ${pr.head.sha.slice(0, 10)} differs from the approved commit ${sha.slice(0, 10)}; approve the new commit to release it.`, `github:pr/${pr.number}`); return; }
+      const m = await gh.mergePinned(pr.number, sha, `Release objective ${objectiveId} (approval ${approvalId})`);
+      await out('succeeded', undefined, `github:pr/${pr.number}@${m.sha}`);
+      this.log(`released objective ${objectiveId} via ${pr.html_url}`);
+    } catch (e) {
+      if (e instanceof GitHubError) { await out('failed', `${e.message}${pr ? ` (PR #${pr.number})` : ''}`, pr ? `github:pr/${pr.number}` : undefined); return; }
+      // Network failure: the merge may or may not have happened — reconcile instead of guessing (INV-11).
+      await out('unknown', (e as Error).message.slice(0, 200), pr ? `github:pr/${pr.number}` : undefined);
+      if (!pr) return;
+      try {
+        const now = await host.api().getPullRequest(pr.number);
+        await this.cmd('recordActionOutcome', { actionId, status: now.merged ? 'succeeded' : 'failed', externalRef: `github:pr/${pr.number}`, reconciled: true,
+          detail: now.merged ? 'reconciled: merged' : 'reconciled: not merged' }, `release:${approvalId}:reconcile`);
+      } catch { /* stays unknown; visible to the CEO and retried by reconciliation */ }
+    }
+  }
+
+  private async objectiveTitle(objectiveId: string) {
+    return (await this.d.ledger.db.query<{ title: string }>('SELECT title FROM objectives WHERE id = $1', [objectiveId])).rows[0]?.title ?? objectiveId;
+  }
+
+  /** PR description generated from the ledger: requirements, accepted work, evidence labels, approval. */
+  async releaseSummary(objectiveId: string, sha: string, approvalId: string): Promise<string> {
+    const q = this.d.ledger.db;
+    const reqs = (await q.query<{ key: string; version: number; text: string }>(
+      `SELECT r.key, r.current_version AS version, rv.text FROM requirements r JOIN requirement_versions rv ON rv.requirement_id = r.id AND rv.version = r.current_version
+       WHERE r.objective_id = $1 AND r.status = 'active' ORDER BY r.key`, [objectiveId])).rows;
+    const tasks = (await q.query<{ title: string; assurance_label: string | null; owner: string }>(
+      `SELECT t.title, t.assurance_label, e.display_name AS owner FROM tasks t JOIN employees e ON e.id = t.owner_employee_id
+       WHERE t.objective_id = $1 AND t.kind <> 'planning' AND t.status = 'accepted' ORDER BY t.title`, [objectiveId])).rows;
+    const approver = (await q.query<{ name: string }>(`SELECT u.name FROM approvals a JOIN users u ON u.id = a.decided_by WHERE a.id = $1`, [approvalId])).rows[0]?.name ?? 'CEO';
+    return [
+      `Release of objective \`${objectiveId}\`, approved by ${approver} (approval \`${approvalId}\`) for commit \`${sha}\`.`,
+      '', '### Requirements', ...reqs.map((r) => `- **${r.key}** (v${r.version}): ${r.text}`),
+      '', '### Accepted work (independently verified)', ...tasks.map((t) => `- ${t.title} — ${t.owner} — assurance \`${t.assurance_label ?? 'n/a'}\``),
+      '', '_Generated by The AI Company from the work ledger. The merge is pinned to the approved commit._',
+    ].join('\n');
   }
 
   // ------------------------------------------------------------------ verification

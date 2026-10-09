@@ -27,7 +27,7 @@ export async function createApp(config: Config, opts: { log?: (m: string) => voi
     policyDir: config.policies_path, clock: opts.clock });
   const host: CodeHost = config.code_hosting.kind === 'local'
     ? new LocalCodeHost(config.code_hosting.path)
-    : new GitHubCodeHost(config.code_hosting.repo, config.code_hosting.token_env, config.code_hosting.base_branch);
+    : new GitHubCodeHost(config.code_hosting.repo, config.code_hosting.token_env, config.code_hosting.base_branch, config.code_hosting.api_url);
   await host.ensure();
   const workspaces = new Workspaces(host, path.join(config.storage_path, 'workspaces'));
   const sandbox: SandboxPort = config.sandbox.kind === 'docker' ? new DockerSandbox(config.sandbox.docker) : new LocalProcessSandbox(config.sandbox.allow_unisolated_local);

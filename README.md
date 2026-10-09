@@ -179,7 +179,7 @@ CEO ⇄ Team Lead (conversation) → proposal (directive) → CEO confirms (hash
 ## Tests
 
 ```bash
-npm test          # 66 tests: property-based state machine, ledger invariants, gateway red-team, team specs,
+npm test          # 72 tests: property-based state machine, ledger invariants, gateway red-team, team specs,
                   # requirement changes, model adapters, Docker sandbox posture, conversations, end-to-end
 npm run typecheck
 ```
@@ -202,8 +202,15 @@ Known gaps, deliberately documented:
   horizontal scale-out (Temporal adapter, architecture.md §4.3) is future work.
 - **Local CLI = trusted CEO session.** Networked deployments need SSO + MFA in front of the API.
 - **Scripted model** handles only demo scenarios; real work needs a customer model profile.
-- Built: requirement changes (`aic requirement`, dashboard → Requirements, or a lead's proposal in
-  conversation), task reassignment (`aic reassign`, dashboard task view), and regression detection.
-  After each merge, the merged task's checks re-run on the integration branch, and a failure reopens
-  the task with the output as feedback. Not yet built: running your external CI as a regression
-  source, memory curation, voice meetings, and a shared template marketplace.
+- Built since the first version:
+  - requirement changes;
+  - task reassignment;
+  - regression detection, both on the integration branch after each merge and from your CI through a
+    signed webhook;
+  - team access tokens (approver, viewer, auditor);
+  - curated team notes;
+  - GitHub releases through a pinned pull request (tested against simulated GitHub responses; not
+    yet run against a live repository).
+
+  Not yet built: SSO login (put the dashboard behind your SSO proxy for now), connectors for email,
+  CRM, and design tools, voice meetings, and a shared template marketplace.

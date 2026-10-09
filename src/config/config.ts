@@ -37,7 +37,7 @@ export const ConfigSchema = z.object({
   }),
   code_hosting: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('local'), path: z.string() }),
-    z.object({ kind: z.literal('github'), repo: z.string(), token_env: z.string(), base_branch: z.string().default('main') }),
+    z.object({ kind: z.literal('github'), repo: z.string(), token_env: z.string(), base_branch: z.string().default('main'), api_url: z.string().url().default('https://api.github.com') }),
   ]).default({ kind: 'local', path: '.aic/repo' }),
   defaults: z.object({
     mode: z.enum(MODES).default('M4'),

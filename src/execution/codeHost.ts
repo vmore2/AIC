@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { GitHubApi } from './github.js';
 
 const run = promisify(execFile);
 
@@ -46,7 +47,12 @@ export class LocalCodeHost implements CodeHost {
 }
 
 export class GitHubCodeHost implements CodeHost {
-  constructor(readonly repo: string, readonly tokenEnv: string, readonly baseBranch = 'main') {}
+  constructor(readonly repo: string, readonly tokenEnv: string, readonly baseBranch = 'main', readonly apiUrl = 'https://api.github.com') {}
+  api(): GitHubApi {
+    const token = process.env[this.tokenEnv];
+    if (!token) throw new Error(`${this.tokenEnv} is not set`);
+    return new GitHubApi(this.repo, token, this.apiUrl);
+  }
   get description() { return `GitHub ${this.repo}`; }
   remote() {
     const token = process.env[this.tokenEnv];

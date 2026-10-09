@@ -51,6 +51,12 @@ code_hosting:
   base_branch: main
 ```
 
+With GitHub, an approved release opens (or reuses) a pull request from the integration branch into
+the base branch. Its description is generated from the ledger: requirements, accepted work, and
+assurance labels. The PR is merged **pinned to the exact approved commit**, and GitHub refuses if the
+branch moved. Your branch protection and required checks still apply. For GitHub Enterprise, set
+`api_url`.
+
 Employees work only on `aic/<task>/<run>` branches. Accepted work merges into
 `aic/<objective>/integration`. Merging into `main` happens only after the CEO approves a release
 (`aic release`), and that approval is bound to the exact integration commit. Protect `main` with
@@ -88,6 +94,28 @@ trusted evaluation machine.
   retried within their attempt limits.
 - Customer policies: drop extra `.cedar` files into a `policies/` folder next to your templates.
   Baseline `forbid` rules cannot be weakened.
+
+## Team access
+
+The owner token printed by `aic serve` acts as the CEO. Give teammates their own tokens:
+
+```bash
+aic users add "Ava Patel" --role approver   # decide approvals, accept work, curate team notes
+aic users add "Sam Lee" --role viewer       # read-only
+aic users revoke <user-or-token-id>
+```
+
+Roles are enforced by the policy engine on every action, and governance (hiring, modes, emergency
+stop, team definitions) requires the owner session. For a shared deployment, put the dashboard behind
+your SSO with MFA.
+
+## CI as a regression signal
+
+Point your CI at `POST /api/hooks/ci` with JSON `{ "sha", "status": "success"|"failure", "name", "url", "branch", "delivery_id" }`
+and header `x-aic-signature: sha256=<HMAC-SHA256 of the raw body with AIC_CI_WEBHOOK_SECRET>`. A
+failure on a commit the platform produced or merged is attributed through the ledger and reopens the
+responsible task, with the CI link included as feedback. Redeliveries with the same `delivery_id` are
+ignored. The platform also re-runs each task's checks on the integration branch after every merge.
 
 ## Readiness check
 
