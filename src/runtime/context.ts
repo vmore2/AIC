@@ -43,6 +43,9 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
   for (const f of failed.rows) feedback.push(`Criterion "${f.statement}" — ${f.result}: ${JSON.stringify(f.details).slice(0, 1200)}`);
   const rejected = await q.query<{ rationale: string }>(`SELECT rationale FROM approvals WHERE subject_id = $1 AND status = 'rejected' ORDER BY created_at`, [taskId]);
   for (const r of rejected.rows) feedback.push(`Human reviewer requested changes: ${r.rationale}`);
+  const reopens = await q.query<{ reason: string | null }>(
+    `SELECT payload->>'reason' AS reason FROM ledger_events WHERE aggregate_id = $1 AND type = 'task.status_changed' AND payload->>'transition' = 'ReopenTask' ORDER BY seq`, [taskId]);
+  for (const r of reopens.rows) feedback.push(`This task was reopened after acceptance: ${r.reason ?? 'no reason recorded'}`);
   const emp = await getEmployee(q, employeeId);
 
   const contract: TaskContract = {

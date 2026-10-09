@@ -489,6 +489,8 @@ export const reopenTask: Handler<{ taskId: string; reason: string }, { status: s
     c.emit({ type: 'task.integrity_changed', aggregateType: 'task', aggregateId: d.task_id, payload: { integrity: 'suspect', cause: i.taskId } });
   }
   await c.q.query(`UPDATE tasks SET hold = 'dependency_regressed' WHERE id IN (SELECT task_id FROM task_dependencies WHERE depends_on_id = $1) AND status IN ('planned','ready')`, [i.taskId]);
+  const reopened = await getTask(c.q, i.taskId);
+  await c.q.query(`UPDATE objectives SET status = 'active', version = version + 1 WHERE id = $1 AND status = 'completed'`, [reopened.objective_id]);
   return { status: r.to, suspect: down.rows.map((d) => d.task_id) };
 };
 
@@ -611,4 +613,31 @@ export const changeRequirement: Handler<{ objectiveId: string; key: string; text
     payload: { key: i.key, version, reason: i.reason, superseded, kept_accepted: keptAccepted, replan_task: planningTaskId } });
   c.emit({ type: 'task.created', aggregateType: 'task', aggregateId: planningTaskId, payload: { objective_id: obj.id, kind: 'planning', status: 'planned', replan_for: i.key } });
   return { requirementId: req.id, version, superseded, keptAccepted, planningTaskId };
+};
+
+/** Move a task to another employee of the same team. In-flight work is fenced off (INV-7) and re-dispatched. */
+export const reassignTask: Handler<{ taskId: string; employeeId: string; reason: string }, { status: string; owner: string }> = async (c, i) => {
+  if (!i.reason || i.reason.trim().length < 3) throw new DomainError('validation', 'A reason is required to reassign');
+  const task = await getTask(c.q, i.taskId, true);
+  const manages = c.principal.type === 'employee' && task.manager_employee_id === c.principal.id;
+  await c.authorize('task.assign', { type: 'Task', id: i.taskId }, { manages_scope: manages, epoch_current: manages && (await managerRunActive(c)), action_class: 'A2' });
+  if (task.owner_employee_id === i.employeeId) throw new DomainError('conflict', 'Task is already owned by that employee');
+  const target = await getEmployee(c.q, i.employeeId);
+  const current = task.owner_employee_id ? await getEmployee(c.q, task.owner_employee_id) : null;
+  const unmet: string[] = [];
+  if (target.status !== 'active') unmet.push('target_active');
+  if (current && target.department_id !== current.department_id) unmet.push('same_team');
+  if (target.category === 'reviewer') unmet.push('target_not_reviewer');
+  if (!target.role_snapshot.task_kinds.includes(task.kind)) unmet.push(`target_role_handles_${task.kind}`);
+  if (['accepted', 'cancelled', 'superseded', 'submitted', 'verifying', 'in_review', 'awaiting_acceptance'].includes(task.status)) unmet.push('reassignable_state');
+  if (unmet.length) throw new DomainError('guard_failed', `Cannot reassign: ${unmet.join(', ')}`, { unmet });
+  // Tool grants follow the new owner's role (never wider than that role allows).
+  const grants = target.tool_grants;
+  if (['in_progress', 'awaiting_input'].includes(task.status)) {
+    await transitionTask(c, i.taskId, 'ReassignTask', { requesterManagesTask: manages }, { reason: `reassigned to ${target.display_name}: ${i.reason}` });
+    await c.q.query(`UPDATE runs SET status = 'interrupted', failure_reason = 'reassigned', ended_at = $2 WHERE task_id = $1 AND mode = 'task' AND status IN ('running','suspended')`, [i.taskId, c.now.toISOString()]);
+  }
+  await c.q.query('UPDATE tasks SET owner_employee_id = $2, tool_grants = $3, version = version + 1 WHERE id = $1', [i.taskId, target.id, JSON.stringify(grants)]);
+  c.emit({ type: 'task.reassigned', aggregateType: 'task', aggregateId: i.taskId, payload: { from: task.owner_employee_id, to: target.id, reason: i.reason } });
+  return { status: (await getTask(c.q, i.taskId)).status, owner: target.display_name };
 };

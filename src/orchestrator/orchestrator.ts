@@ -175,6 +175,7 @@ export class Orchestrator {
       return;
     }
     await this.integrate(t.id, t.objective_id, evId);
+    if (await this.checkIntegration(t.id)) return; // regression: the task was reopened
     const deps = await this.d.ledger.db.query<{ task_id: string }>('SELECT task_id FROM task_dependencies WHERE depends_on_id = $1', [taskId]);
     for (const dep of deps.rows) await this.tryReady(dep.task_id, evId);
     const r = await this.cmd('completeObjective', { objectiveId: t.objective_id }, `react:${evId}:complete`);
@@ -198,6 +199,38 @@ export class Orchestrator {
     const r = await this.d.workspaces.mergeIntoIntegration(objectiveId, sha, `Integrate ${taskId} (${sha.slice(0, 10)})`);
     await this.cmd('recordActionOutcome', { actionId, status: r.ok ? 'succeeded' : 'failed', externalRef: r.sha ? `git:${r.sha}` : undefined, detail: r.error }, `react:${evId}:merge-outcome`);
     this.log(r.ok ? `integrated ${taskId} into ${this.d.workspaces.integrationBranch(objectiveId)}` : `merge conflict integrating ${taskId}: ${r.error}`);
+  }
+
+  /**
+   * Regression detection (architecture.md §11.5): after accepted work merges, re-run its command
+   * checks on the integration branch. A failure reopens the task with the failure as feedback.
+   * Returns true if the task was reopened.
+   */
+  async checkIntegration(taskId: string): Promise<boolean> {
+    const q = this.d.ledger.db;
+    const t = await getTask(q, taskId);
+    if (t.status !== 'accepted' || !t.criteria_set_id) return false;
+    const checks = (await q.query<{ statement: string; check_spec: { type: string; run?: string; timeout_s?: number } | null }>(
+      'SELECT statement, check_spec FROM criteria WHERE criteria_set_id = $1', [t.criteria_set_id])).rows.filter((c) => c.check_spec?.type === 'command' && c.check_spec.run);
+    if (!checks.length) return false;
+    const sha = await this.d.workspaces.remoteSha(`refs/heads/${this.d.workspaces.integrationBranch(t.objective_id)}`);
+    if (!sha) return false;
+    const dir = await this.d.workspaces.checkoutForVerification(sha, `integration-${taskId}`);
+    try {
+      for (const c of checks) {
+        const r = await this.d.sandbox.exec(dir, c.check_spec!.run!, (c.check_spec!.timeout_s ?? 600) * 1000);
+        if (r.exitCode !== 0) {
+          const tail = `${r.stdout}\n${r.stderr}`.trim().slice(-1500);
+          this.log(`REGRESSION after integrating ${taskId}: "${c.statement}" fails on the integration branch`);
+          await this.cmd('reopenTask', { taskId, reason: `Regression: "${c.statement}" (\`${c.check_spec!.run}\`) fails on the integration branch at ${sha.slice(0, 10)} after this task was merged. Output:\n${tail}` }, `regression:${taskId}:${sha}`);
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      const { rmSync } = await import('node:fs');
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    }
   }
 
   private async release(objectiveId: string, sha: string, approvalId: string) {

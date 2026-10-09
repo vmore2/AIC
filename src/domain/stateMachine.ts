@@ -45,7 +45,7 @@ export type TransitionType =
   | 'SubmitForApproval' | 'PlanTask' | 'ApprovePlan' | 'RejectPlan' | 'MarkReady' | 'Dispatch'
   | 'RaiseBlocker' | 'ResolveBlocker' | 'SubmitWork' | 'RecordRunFailed' | 'RecordRunAbandoned'
   | 'StartVerification' | 'ApplyEvaluation' | 'AcceptTask' | 'RejectTask' | 'AcceptUncertain'
-  | 'RequeueAfterChanges' | 'ReopenTask' | 'RetryTask' | 'CancelTask' | 'SupersedeTask';
+  | 'RequeueAfterChanges' | 'ReopenTask' | 'RetryTask' | 'CancelTask' | 'SupersedeTask' | 'ReassignTask';
 
 export type Decision =
   | { ok: true; to: TaskStatus; effects: Effect[] }
@@ -78,6 +78,7 @@ export const REQUESTERS: Record<TransitionType, PrincipalType[]> = {
   RetryTask: ['user'],
   CancelTask: ['user', 'employee'],
   SupersedeTask: ['system'],
+  ReassignTask: ['user', 'employee'],
 };
 
 const NON_TERMINAL = (s: TaskStatus) => !TERMINAL_STATUSES.has(s);
@@ -188,7 +189,7 @@ export function decide(task: TaskView, type: TransitionType, f: GuardFacts): Dec
       break;
     case 'ReopenTask':
       from('accepted'); need(!!f.rationale, 'reason_present');
-      to = 'ready'; effects.push('mark_downstream_suspect');
+      to = 'ready'; effects.push('mark_downstream_suspect', 'reset_attempts');
       break;
     case 'RetryTask':
       from('failed'); need(f.budgetAvailable, 'budget_reservable');
@@ -198,6 +199,12 @@ export function decide(task: TaskView, type: TransitionType, f: GuardFacts): Dec
       need(NON_TERMINAL(task.status) && task.status !== 'accepted', 'cancellable_state');
       need(f.requesterType === 'user' || !!f.requesterManagesTask, 'canceller_manages_task');
       to = 'cancelled'; effects.push('revoke_lease', 'release_budget');
+      break;
+    case 'ReassignTask':
+      // Moving in-flight work to another employee: the old run is fenced off (epoch++) and the task is re-dispatched.
+      from('in_progress', 'awaiting_input');
+      need(f.requesterType === 'user' || !!f.requesterManagesTask, 'reassigner_manages_task');
+      to = 'ready'; effects.push('revoke_lease', 'release_budget');
       break;
     case 'SupersedeTask':
       need(['draft', 'planned', 'ready', 'in_progress', 'awaiting_input', 'changes_requested'].includes(task.status), 'supersedable_state');

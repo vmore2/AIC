@@ -84,6 +84,7 @@ ${c.b('Oversight')}
   aic task <id>                                    claim vs evidence, runs, timeline
   aic accept <task> [-m] | aic reject <task> -m    human acceptance where required
   aic resolve <escalation> "answer"                answer a question / decide a blocker
+  aic reassign <task> <employee> -m "why"          move a task to another team member
   aic release <objective>                          approve merging accepted work to main
   aic mode <M1..M6> [--department key] -m "why"    operating mode
   aic stop -m "why" | aic resume [--mode M4] [--ack]   emergency stop / resume
@@ -294,6 +295,14 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
         ? await ledger.run('acceptTask', { taskId: pos[1]!, submissionSha256: sub.submission_sha256, rationale: msg, uncertain: !!flags['uncertain'] }, await ceo(app))
         : await ledger.run('rejectTask', { taskId: pos[1]!, rationale: msg ?? '' }, await ceo(app));
       console.log(`${c.g('✔')} ${r.status}`);
+      return;
+    }
+    case 'reassign': {
+      const [taskId, who] = [pos[1], pos[2]];
+      if (!taskId || !who) throw new Error('Usage: aic reassign <task> <employee|role> -m "why"');
+      const emp = await resolveEmployee(app, who);
+      const r = await ledger.run('reassignTask', { taskId, employeeId: emp.id, reason: msg ?? '' }, await ceo(app));
+      console.log(`${c.g('✔')} Reassigned to ${r.owner} (${r.status}). Any in-flight run by the previous owner was fenced off.`);
       return;
     }
     case 'resolve': {

@@ -125,8 +125,23 @@ async function task(id) {
     ${d.claimVsEvidence.map((x) => `<tr><td>${esc(x.criterion)}</td><td>${x.claimed || '—'}</td><td class="${x.verified === 'passed' ? 'ok' : x.verified === 'failed' ? 'bad' : 'warn'}">${x.verified}
       ${x.claimed === 'met' && x.verified === 'failed' ? '<div class="flag">claim contradicted by evidence</div>' : ''}</td></tr>`).join('')}</table>
     ${t.status === 'awaiting_acceptance' ? `<p><textarea id="ask" rows="2" placeholder="Rationale (required to request changes)"></textarea></p><p><button class="act" onclick="decideTask('${t.id}','accept')">Accept</button> <button class="sec" onclick="decideTask('${t.id}','reject')">Request changes</button></p>` : ''}
+    ${['planned', 'ready', 'in_progress', 'awaiting_input', 'changes_requested', 'failed'].includes(t.status) ? `<div id="reassign" class="row" style="margin:10px 0"></div>` : ''}
     <h4>Runs</h4>${d.runs.map((r) => `<div>${r.mode} · ${esc(r.employee)} · ${r.status}${r.failure_reason ? ' (' + esc(r.failure_reason) + ')' : ''}</div>`).join('')}
     <h4>Timeline (ledger)</h4><pre>${d.timeline.map((e) => `${e.seq} ${e.at} ${e.type} ${JSON.stringify(e.payload).slice(0, 160)}`).join('\n')}</pre></div>`;
+  loadReassign(t.id);
+}
+async function loadReassign(id) {
+  const box = document.getElementById('reassign'); if (!box) return;
+  const cands = await api(`/api/tasks/${id}/candidates`);
+  if (!cands.length) { box.innerHTML = '<span class="muted">No other team member can take this task.</span>'; return; }
+  box.innerHTML = `<select id="ra-who" style="width:auto">${cands.map((c) => `<option value="${c.id}">${esc(c.display_name)}</option>`).join('')}</select>
+    <input id="ra-why" placeholder="Why reassign?" style="flex:1"><button class="sec" onclick="reassign('${id}')">Reassign</button>`;
+}
+async function reassign(id) {
+  const reason = document.getElementById('ra-why').value.trim();
+  if (!reason) { alertBox('Give a reason for reassigning.'); return; }
+  try { await api(`/api/tasks/${id}/reassign`, { method: 'POST', body: JSON.stringify({ employeeId: document.getElementById('ra-who').value, reason }) }); task(id); }
+  catch (e) { alertBox(e.message); }
 }
 async function decideTask(id, what) {
   const rationale = what === 'reject' ? window.__ask('What should change?') : '';

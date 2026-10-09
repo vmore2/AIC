@@ -98,6 +98,12 @@ export function buildServer(app: App, token: string) {
     app.ledger.run('resumeScope', { scope: { type: 'company', id: (await db.query<{ id: string }>('SELECT id FROM company')).rows[0]!.id },
       mode: req.body.mode ?? app.config.defaults.mode, acknowledgeUnresolvedActions: !!req.body.ack, reason: req.body.reason ?? 'resume' }, await ceo(), key(req)));
   registerTeamRoutes(server, app, ceo);
+  server.post<{ Params: { id: string }; Body: { employeeId: string; reason: string } }>('/api/tasks/:id/reassign', async (req) =>
+    app.ledger.run('reassignTask', { taskId: req.params.id, employeeId: req.body.employeeId, reason: req.body.reason }, await ceo(), key(req)));
+  server.get<{ Params: { id: string } }>('/api/tasks/:id/candidates', async (req) =>
+    (await db.query(`SELECT e.id, e.display_name, e.role_key FROM employees e JOIN tasks t ON t.id = $1 JOIN employees o ON o.id = t.owner_employee_id
+                     WHERE e.department_id = o.department_id AND e.status = 'active' AND e.category <> 'reviewer' AND e.id <> t.owner_employee_id
+                       AND e.role_snapshot->'task_kinds' ? t.kind ORDER BY e.display_name`, [req.params.id])).rows);
   server.get<{ Params: { id: string } }>('/api/objectives/:id/requirements', async (req) =>
     (await db.query(`SELECT r.key, r.current_version AS version, rv.text FROM requirements r JOIN requirement_versions rv ON rv.requirement_id = r.id AND rv.version = r.current_version
                      WHERE r.objective_id = $1 AND r.status = 'active' ORDER BY r.key`, [req.params.id])).rows);
