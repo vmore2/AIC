@@ -1,10 +1,11 @@
 import type { Config, ModelProfile } from '../config/config.js';
 import { AnthropicModel, OpenAICompatibleModel, type ModelPort } from './modelPort.js';
 import { ScriptedModel, type Persona } from './scripted.js';
+import { SpendGuard, SpendGuardedModel } from './spendGuard.js';
 
 /** Builds the customer's configured model for an employee run. */
 export class ModelFactory {
-  constructor(private readonly profiles: ModelProfile[]) {}
+  constructor(private readonly profiles: ModelProfile[], private readonly guard: SpendGuard | null = null) {}
   static fromConfig(cfg: Config) { return new ModelFactory(cfg.models.profiles); }
 
   profile(key: string): ModelProfile {
@@ -15,11 +16,11 @@ export class ModelFactory {
 
   create(profileKey: string, persona: Persona): ModelPort {
     const p = this.profile(profileKey);
-    switch (p.provider) {
-      case 'openai_compatible': return new OpenAICompatibleModel(p);
-      case 'anthropic': return new AnthropicModel(p);
-      case 'scripted': return new ScriptedModel(p, persona);
-    }
+    if (p.provider === 'scripted') return new ScriptedModel(p, persona);
+    const inner = p.provider === 'openai_compatible' ? new OpenAICompatibleModel(p) : new AnthropicModel(p);
+    // Real providers go through the lifetime spend cap when one is configured (AIC_SPEND_CAP_USD).
+    const guard = this.guard ?? SpendGuard.fromEnv();
+    return guard ? new SpendGuardedModel(inner, guard) : inner;
   }
 }
 

@@ -4,6 +4,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createApp, type App } from '../app.js';
 import { DEFAULT_CONFIG_FILE, loadConfig, STARTER_CONFIG } from '../config/config.js';
+import { loadDotEnv } from '../config/env.js';
 import { MODE_NAMES, MODES, SYSTEM, type Mode, type Principal } from '../domain/types.js';
 import { DomainError, verifyChain } from '../ledger/engine.js';
 import { loadCatalog, loadTeamFile, scaffoldTeam, type CatalogEntry } from '../org/catalog.js';
@@ -104,6 +105,7 @@ ${c.b('Serve')}
 `;
 
 async function main() {
+  loadDotEnv();
   const { pos, flags, multi } = parse(process.argv.slice(2));
   const cmd = pos[0];
   if (!cmd || cmd === 'help' || flags['help']) { console.log(HELP); return; }
