@@ -66,10 +66,14 @@ const BUILTINS: Record<string, BuiltinTool> = {
     },
   },
   'ledger.propose_plan': {
-    schema: z.object({ plan: z.record(z.unknown()) }),
-    run: async (env, a: { plan: Record<string, unknown> }, gw) => {
+    // Lenient on shape (models often put fields beside `plan`); strict on content (validatePlan).
+    schema: z.object({ plan: z.record(z.unknown()).default({}) }).passthrough(),
+    run: async (env, a: { plan: Record<string, unknown> } & Record<string, unknown>, gw) => {
+      const { plan, ...rest } = a;
+      const merged = { ...rest, ...plan } as Record<string, unknown>;
+      delete merged['requirement_keys'];
       try {
-        const r = await gw.ledger.run('proposePlan', { taskId: env.claims.taskId!, plan: a.plan }, env.principal);
+        const r = await gw.ledger.run('proposePlan', { taskId: env.claims.taskId!, plan: merged }, env.principal);
         return ok({ status: 'submitted', proposal_id: r.proposalId, warnings: r.validation.warnings,
           message: 'Plan submitted. The platform validates it independently and the CEO decides. Your run will now end.' }, 'trusted', 'submitted');
       } catch (e) {
@@ -250,7 +254,21 @@ const BUILTINS: Record<string, BuiltinTool> = {
 
 /** JSON-Schema-ish parameter descriptions given to models (zod remains the authority). */
 const PARAMS: Record<string, Record<string, unknown>> = {
-  'ledger.propose_plan': { type: 'object', properties: { plan: { type: 'object', description: 'Plan in the plan_format from your Task Contract' } }, required: ['plan'] },
+  'ledger.propose_plan': { type: 'object', required: ['plan'], properties: { plan: {
+    type: 'object', required: ['summary', 'tasks'], description: 'The whole plan. The tasks array goes INSIDE plan.',
+    properties: {
+      summary: { type: 'string' },
+      tasks: { type: 'array', minItems: 1, items: { type: 'object', required: ['ref', 'title', 'kind', 'spec', 'owner_role', 'requirement_keys', 'budget_usd'], properties: {
+        ref: { type: 'string', description: 'short id, e.g. t1' }, title: { type: 'string' },
+        kind: { type: 'string', enum: ['discovery', 'implementation', 'integration', 'research', 'decision', 'remediation', 'operation'] },
+        spec: { type: 'string', description: 'exactly what to deliver' }, owner_role: { type: 'string', description: 'a role key from your_team' },
+        requirement_keys: { type: 'array', items: { type: 'string' } }, depends_on: { type: 'array', items: { type: 'string' } },
+        budget_usd: { type: 'number', description: 'the sum over all tasks must fit budget_available_usd' },
+        criteria: { type: 'array', description: 'optional extra acceptance criteria; role defaults are added automatically', items: { type: 'object' } },
+      } } },
+      risks: { type: 'array', items: { type: 'string' } },
+      open_questions: { type: 'array', items: { type: 'string' } },
+    } } } },
   'ledger.submit_work': { type: 'object', properties: { summary: { type: 'string' }, per_criterion: { type: 'array', items: { type: 'object', properties: { criterion_id: { type: 'string' }, self_assessment: { type: 'string', enum: ['met', 'partially_met', 'not_met'] }, notes: { type: 'string' } } } }, known_gaps: { type: 'array', items: { type: 'string' } } }, required: ['summary'] },
   'ledger.raise_blocker': { type: 'object', properties: { type: { type: 'string', enum: ['blocker', 'decision_required'] }, question: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, summary: { type: 'string' }, consequences: { type: 'string' } } } }, recommendation: { type: 'string' } }, required: ['question'] },
   'ledger.ask_question': { type: 'object', properties: { question: { type: 'string' }, blocking: { type: 'boolean' } }, required: ['question'] },

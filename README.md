@@ -179,7 +179,7 @@ CEO ⇄ Team Lead (conversation) → proposal (directive) → CEO confirms (hash
 ## Tests
 
 ```bash
-npm test          # 75 tests (Docker tests run when Docker is available): property-based state machine, ledger invariants, gateway red-team, team specs,
+npm test          # 81 tests (Docker tests run when Docker is available): property-based state machine, ledger invariants, gateway red-team, team specs,
                   # requirement changes, model adapters, Docker sandbox posture, conversations, end-to-end
 npm run typecheck
 ```
@@ -206,17 +206,23 @@ Known gaps, deliberately documented:
   classes, but beyond git push/merge they need customer-installed connectors. Uninstalled connectors are refused.
 - **Single orchestrator process per company.** Leases, fencing, and drift repair make crashes safe, but
   horizontal scale-out (Temporal adapter, architecture.md §4.3) is future work.
-- **Local CLI = trusted CEO session.** Networked deployments need SSO + MFA in front of the API.
+- **Local CLI = trusted CEO session.** The dashboard supports Google sign-in (tested against a mock
+  Google; see docs/connect-your-infrastructure.md). Serve it over HTTPS when it isn't on localhost.
+- **Real models** are tested opt-in (`AIC_LIVE=1`) against OpenAI under a lifetime spend cap
+  (`AIC_SPEND_CAP_USD`). A cheap model (gpt-4.1-nano) plans and implements real objectives, and the
+  platform catches its mistakes. For example, a plan with only analysis tasks is refused, and a
+  review that keeps failing goes to the CEO as uncertain instead of passing.
 - **Scripted model** handles only demo scenarios; real work needs a customer model profile.
 - Built since the first version:
   - requirement changes;
   - task reassignment;
   - regression detection, both on the integration branch after each merge and from your CI through a
     signed webhook;
-  - team access tokens (approver, viewer, auditor);
+  - team access tokens (approver, viewer, auditor) and Google sign-in;
+  - a lifetime spend cap per provider key;
   - curated team notes;
   - GitHub releases through a pinned pull request (tested against simulated GitHub responses; not
     yet run against a live repository).
 
-  Not yet built: SSO login (put the dashboard behind your SSO proxy for now), connectors for email,
+  Not yet built: SAML/other SSO providers, connectors for email,
   CRM, and design tools, voice meetings, and a shared template marketplace.

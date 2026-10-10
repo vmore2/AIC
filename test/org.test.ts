@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadDepartments, validateDepartment } from '../src/org/validate.js';
 import type { Department } from '../src/org/schema.js';
+import { validatePlan } from '../src/ledger/plan.js';
 
 const { departments, findings } = loadDepartments('templates/recommended');
 const byKey = (k: string) => structuredClone(departments.find((d) => d.key === k)!) as Department;
@@ -90,5 +91,23 @@ describe('architecture rules reject unsafe team designs', () => {
     const d = byKey('finance');
     d.workflows[0]!.stages = d.workflows[0]!.stages.map((s) => ({ ...s, gate: 'none' as const }));
     expect(rules(d)).toContain('human_gate');
+  });
+});
+
+describe('plan validation', () => {
+  const eng = byKey('engineering');
+  const ctx = { department: eng, leadRoleKey: 'engineering_lead', requirementKeys: ['REQ-1'], budgetRemaining: 1, riskFloor: 'R1' as const, settings: { test_command: 'node --test' } };
+  const task = (over: object) => ({ ref: 't1', title: 'Analyze the requirement', kind: 'discovery', spec: 'Work out how to build it', owner_role: 'engineering_lead', requirement_keys: ['REQ-1'], budget_usd: 0.1, ...over });
+
+  it('analysis-only tasks do not cover a requirement the team can deliver', () => {
+    const v = validatePlan({ summary: 'Analyze first, build later', tasks: [task({})] }, ctx);
+    expect(v.ok).toBe(false);
+    expect(v.errors.join('\n')).toMatch(/REQ-1 is not covered by any task that delivers it — add a task owned by one of: .*software_engineer \(implementation\/remediation\)/);
+  });
+
+  it('a delivering task covers it; analysis may sit alongside', () => {
+    const v = validatePlan({ summary: 'Analyze, then build it', tasks: [task({}), task({ ref: 't2', title: 'Build it', kind: 'implementation', owner_role: 'software_engineer', depends_on: ['t1'] })] }, ctx);
+    expect(v.errors).toEqual([]);
+    expect(v.coverage['REQ-1']).toEqual(['t2']);
   });
 });

@@ -341,10 +341,14 @@ export class Orchestrator {
       `SELECT id FROM employees WHERE department_id = $1 AND role_key = $2 AND status = 'active' ORDER BY created_at`, [owner.department_id, reviewerRole ?? ''])).rows;
     const reviewer = candidates[0];
     if (!reviewer) { this.log(`no reviewer available for ${taskId}`); return; }
-    const a = await this.cmd('assignReview', { taskId, reviewerEmployeeId: reviewer.id }, `review:${taskId}:${t.version}`);
+    // One key per review attempt: a replay of a finished attempt must not relaunch it.
+    const done = (await this.d.ledger.db.query<{ n: string }>(
+      `SELECT count(*) AS n FROM runs r JOIN submissions s ON s.id = r.review_of_submission_id WHERE s.task_id = $1 AND s.status = 'open' AND r.status <> 'running'`, [taskId])).rows[0]!.n;
+    const a = await this.cmd('assignReview', { taskId, reviewerEmployeeId: reviewer.id }, `review:${taskId}:${t.version}:${done}`);
     if (!a) return;
+    if (!a.runId) { this.log(`task ${taskId} is UNCERTAIN — ${a.unavailable}`); return; }
     const { runId, submissionId } = a;
-    if (this.active.has(runId)) return;
+    if (this.active.has(runId) || (await getRun(this.d.ledger.db, runId)).status !== 'running') return;
     const art = (await this.d.ledger.db.query<{ external_ref: string | null }>(
       `SELECT av.external_ref FROM submission_artifacts sa JOIN artifact_versions av ON av.id = sa.artifact_version_id WHERE sa.submission_id = $1`, [submissionId])).rows[0];
     const sha = art?.external_ref?.startsWith('git:') ? art.external_ref.slice(4) : null;
@@ -398,7 +402,7 @@ export class Orchestrator {
       })
       .catch(async (e) => {
         this.log(`run ${runId} crashed: ${(e as Error).message}`);
-        await this.cmd('endRun', { runId, outcome: 'failed', reason: `runtime error: ${(e as Error).message.slice(0, 200)}` }, `end:${runId}`).catch(() => undefined);
+        await this.cmd('endRun', { runId, outcome: 'failed', reason: `runtime error: ${(e as Error).message.slice(0, 200)}` }, `crash:${runId}`).catch(() => undefined);
       })
       .finally(() => { this.active.delete(runId); });
     this.active.set(runId, p);

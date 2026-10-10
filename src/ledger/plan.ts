@@ -68,7 +68,7 @@ export function validatePlan(raw: unknown, ctx: PlanContext): PlanValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
   const parsed = PlanSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false, errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`), warnings, coverage: {}, tasks: [] };
+  if (!parsed.success) return { ok: false, errors: parsed.error.issues.map((i) => `plan.${i.path.join('.')}: ${i.message}${i.path[0] === 'tasks' && i.path.length === 1 ? ' (a non-empty tasks array inside plan)' : ''}`), warnings, coverage: {}, tasks: [] };
   const plan = parsed.data;
   const roles = new Map<string, Role>(ctx.department.roles.map((r) => [r.key, r]));
   const leadsTeam = new Set(ctx.department.structure.filter((s) => s.reports_to === ctx.leadRoleKey).map((s) => s.role).concat(ctx.leadRoleKey));
@@ -85,6 +85,8 @@ export function validatePlan(raw: unknown, ctx: PlanContext): PlanValidation {
   const coverage: Record<string, string[]> = Object.fromEntries(ctx.requirementKeys.map((k) => [k, []]));
   const known = new Set([...(ctx.knownRequirementKeys ?? []), ...ctx.requirementKeys]);
   let budget = 0;
+  const deliverers = ctx.department.roles.filter((r) => r.category !== 'reviewer' && r.task_kinds.some((k) => ARTIFACT_KINDS.has(k)))
+    .map((r) => `${r.key} (${r.task_kinds.filter((k) => ARTIFACT_KINDS.has(k)).join('/')})`);
 
   for (const t of plan.tasks) {
     const role = roles.get(t.owner_role);
@@ -95,7 +97,9 @@ export function validatePlan(raw: unknown, ctx: PlanContext): PlanValidation {
     if (!role.task_kinds.includes(t.kind)) errors.push(`[${t.ref}] role "${role.key}" cannot own task kind "${t.kind}"`);
     for (const k of t.requirement_keys) {
       if (!known.has(k)) errors.push(`[${t.ref}] unknown requirement "${k}"`);
-      else if (k in coverage) coverage[k]!.push(t.ref);
+      // Coverage means delivering the requirement: analysis-only tasks (discovery/decision) don't count
+      // when the team has someone who can produce it.
+      else if (k in coverage && (ARTIFACT_KINDS.has(t.kind) || !deliverers.length)) coverage[k]!.push(t.ref);
     }
     for (const d of t.depends_on) {
       if (!refs.has(d)) errors.push(`[${t.ref}] depends on unknown ref "${d}"`);
@@ -113,7 +117,8 @@ export function validatePlan(raw: unknown, ctx: PlanContext): PlanValidation {
     budget += t.budget_usd;
     resolved.push({ ...t, criteria, risk_tier: riskRank(tier) < riskRank(ctx.riskFloor) ? ctx.riskFloor : tier, tool_grants: role.tools.filter((x) => !role.denied_tools.includes(x)) });
   }
-  for (const [k, covering] of Object.entries(coverage)) if (!covering.length) errors.push(`Requirement ${k} is not covered by any task`);
+  for (const [k, covering] of Object.entries(coverage)) if (!covering.length)
+    errors.push(`Requirement ${k} is not covered by any task that delivers it${deliverers.length ? ` — add a task owned by one of: ${deliverers.join(', ')}` : ''}`);
   if (budget > ctx.budgetRemaining + 1e-9) errors.push(`Plan budget $${budget.toFixed(2)} exceeds remaining objective budget $${ctx.budgetRemaining.toFixed(2)}`);
   if (plan.open_questions.length) warnings.push(`${plan.open_questions.length} open question(s) for the CEO`);
   return { ok: errors.length === 0, errors, warnings, coverage, tasks: resolved };

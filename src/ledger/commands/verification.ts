@@ -4,7 +4,8 @@ import { newId } from '../../domain/ids.js';
 import { humanAcceptanceRequired } from '../../domain/modes.js';
 import type { IndependenceClass } from '../../domain/types.js';
 import { DomainError, type CommandContext, type Handler } from '../engine.js';
-import { getCriteria, getRun, getTask } from '../store.js';
+import { getCriteria, getObjective, getRun, getTask } from '../store.js';
+import type { Role } from '../../org/schema.js';
 import { transitionTask } from '../transition.js';
 
 export const startVerification: Handler<{ taskId: string }, { status: string }> = async (c, i) => {
@@ -125,21 +126,39 @@ export const requeueAfterChanges: Handler<{ taskId: string }, { status: string }
 };
 
 /** Start an independent review run for a submission (assigned by the platform, never by the producer). */
-export const assignReview: Handler<{ taskId: string; reviewerEmployeeId: string }, { runId: string; submissionId: string }> = async (c, i) => {
+export const MAX_REVIEW_RUNS = 2;
+
+/**
+ * Returns `runId: null` when no review can run (repeated reviewer failures or no objective budget left);
+ * the task then goes to a human as UNCERTAIN instead of waiting forever for a verdict.
+ */
+export const assignReview: Handler<{ taskId: string; reviewerEmployeeId: string }, { runId: string | null; submissionId: string; unavailable?: string }> = async (c, i) => {
   await c.authorize('review.assign', { type: 'Task', id: i.taskId }, {});
   const sub = (await c.q.query<{ id: string }>(`SELECT id FROM submissions WHERE task_id = $1 AND status = 'open'`, [i.taskId])).rows[0];
   if (!sub) throw new DomainError('guard_failed', 'No open submission');
   const lineage = new Set((await c.q.query<{ producer_lineage: string[] }>(
     'SELECT av.producer_lineage FROM submission_artifacts sa JOIN artifact_versions av ON av.id = sa.artifact_version_id WHERE sa.submission_id = $1', [sub.id])).rows.flatMap((r) => r.producer_lineage));
   if (lineage.has(i.reviewerEmployeeId)) throw new DomainError('guard_failed', 'Reviewer is in the producer lineage (INV-2)');
-  const emp = (await c.q.query<{ id: string; model_profile: string; model_family: string; category: string; status: string }>('SELECT * FROM employees WHERE id = $1', [i.reviewerEmployeeId])).rows[0];
+  const emp = (await c.q.query<{ id: string; model_profile: string; model_family: string; category: string; status: string; role_snapshot: Role }>('SELECT * FROM employees WHERE id = $1', [i.reviewerEmployeeId])).rows[0];
   if (!emp || emp.status !== 'active') throw new DomainError('not_found', 'Reviewer not available');
   if (emp.category !== 'reviewer' && emp.category !== 'qa') throw new DomainError('guard_failed', 'Assigned employee is not a reviewer');
   const existing = (await c.q.query<{ id: string }>(`SELECT id FROM runs WHERE review_of_submission_id = $1 AND status = 'running'`, [sub.id])).rows[0];
   if (existing) return { runId: existing.id, submissionId: sub.id };
+  const task = await getTask(c.q, i.taskId, true);
+  const obj = await getObjective(c.q, task.objective_id, true);
+  const failed = Number((await c.q.query<{ n: string }>(`SELECT count(*) AS n FROM runs WHERE review_of_submission_id = $1 AND status <> 'running'`, [sub.id])).rows[0]!.n);
+  const objRemaining = Number(obj.budget_limit) - Number(obj.budget_reserved) - Number(obj.budget_spent);
+  const reservation = Math.min(emp.role_snapshot.budget.per_run.max_cost_usd, objRemaining);
+  const unavailable = failed >= MAX_REVIEW_RUNS ? `the independent review failed ${failed} times` : reservation <= 0 ? 'the objective budget is exhausted' : null;
+  if (unavailable) {
+    await transitionTask(c, i.taskId, 'ApplyEvaluation', { evaluation: 'uncertain', humanAcceptanceRequired: true }, { reason: `review unavailable: ${unavailable}` });
+    c.emit({ type: 'review.unavailable', aggregateType: 'task', aggregateId: i.taskId, payload: { submission_id: sub.id, reason: unavailable } });
+    return { runId: null, submissionId: sub.id, unavailable };
+  }
   const runId = newId('run');
   await c.q.query(`INSERT INTO runs (id, task_id, employee_id, mode, model_profile, model_family, status, review_of_submission_id, budget_reserved)
-                   VALUES ($1,$2,$3,'review',$4,$5,'running',$6,$7)`, [runId, i.taskId, emp.id, emp.model_profile, emp.model_family, sub.id, 10]);
+                   VALUES ($1,$2,$3,'review',$4,$5,'running',$6,$7)`, [runId, i.taskId, emp.id, emp.model_profile, emp.model_family, sub.id, reservation]);
+  await c.q.query('UPDATE objectives SET budget_reserved = budget_reserved + $2 WHERE id = $1', [obj.id, reservation]);
   c.emit({ type: 'review.assigned', aggregateType: 'task', aggregateId: i.taskId, payload: { run_id: runId, reviewer: emp.id, submission_id: sub.id } });
   return { runId, submissionId: sub.id };
 };

@@ -96,6 +96,7 @@ ${c.b('People')}
   aic users                                        people with access
   aic users add "Name" --role approver             give a teammate a personal access token (approver|viewer|auditor|admin)
   aic users revoke <user-or-token-id>              revoke access
+  aic users email <user-id|ceo> you@example.com    the email they sign in with (Google sign-in)
 
 ${c.b('Operate')}
   aic doctor                                       readiness checks for your infrastructure
@@ -143,7 +144,7 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
     case 'init': {
       const exists = (await db.query('SELECT 1 FROM company')).rows.length;
       if (exists) { console.log('Company already initialized.'); return; }
-      await ledger.run('bootstrapCompany', { companyName: config.company.name, ceoName: String(flags['ceo'] ?? 'CEO'), defaultMode: config.defaults.mode, projectSettings: config.defaults.project_settings }, SYSTEM);
+      await ledger.run('bootstrapCompany', { companyName: config.company.name, ceoName: String(flags['ceo'] ?? 'CEO'), ceoEmail: typeof flags['ceo-email'] === 'string' ? flags['ceo-email'].toLowerCase() : undefined, defaultMode: config.defaults.mode, projectSettings: config.defaults.project_settings }, SYSTEM);
       console.log(`${c.g('✔')} ${config.company.name} is ready. Mode: ${config.defaults.mode} (${MODE_NAMES[config.defaults.mode]}).`);
       console.log(`Next: ${c.cy('aic teams')} to browse teams, then ${c.cy('aic hire engineering')}.`);
       return;
@@ -325,9 +326,9 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
     case 'users': {
       const sub = pos[1] ?? 'list';
       if (sub === 'list') {
-        const rows = (await db.query<{ id: string; name: string; role: string; tokens: string }>(
-          `SELECT u.id, u.name, u.role, (SELECT count(*) FROM access_tokens a WHERE a.user_id = u.id AND a.revoked_at IS NULL) AS tokens FROM users u ORDER BY u.created_at`)).rows;
-        for (const u of rows) console.log(`  ${u.name.padEnd(24)} ${u.role.padEnd(9)} ${c.dim(u.id)}  active tokens: ${u.tokens}`);
+        const rows = (await db.query<{ id: string; name: string; role: string; email: string | null; tokens: string }>(
+          `SELECT u.id, u.name, u.role, u.email, (SELECT count(*) FROM access_tokens a WHERE a.user_id = u.id AND a.revoked_at IS NULL) AS tokens FROM users u ORDER BY u.created_at`)).rows;
+        for (const u of rows) console.log(`  ${u.name.padEnd(24)} ${u.role.padEnd(9)} ${c.dim(u.id)}  ${u.email ?? c.dim('no email')}  active tokens: ${u.tokens}`);
         return;
       }
       if (sub === 'add') {
@@ -345,7 +346,15 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
         console.log(r.revoked ? `${c.g('✔')} Revoked.` : 'Nothing to revoke.');
         return;
       }
-      throw new Error('Usage: aic users [list | add "Name" --role approver | revoke <user-or-token-id>]');
+      if (sub === 'email') {
+        const principal = await ceo(app);
+        const userId = pos[2] === 'ceo' ? principal.id : pos[2];
+        if (!userId || !pos[3]) throw new Error('Usage: aic users email <user-id|ceo> you@example.com');
+        await ledger.run('setUserEmail', { userId, email: pos[3] }, principal);
+        console.log(`${c.g('✔')} ${pos[3].toLowerCase()} can now sign in with Google (when auth.google is configured).`);
+        return;
+      }
+      throw new Error('Usage: aic users [list | add "Name" --role approver | revoke <user-or-token-id> | email <user-id|ceo> <email>]');
     }
     case 'reassign': {
       const [taskId, who] = [pos[1], pos[2]];

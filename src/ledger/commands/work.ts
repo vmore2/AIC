@@ -189,6 +189,10 @@ export const endRun: Handler<{ runId: string; outcome: RunOutcome; reason?: stri
   const unusedReservation = Math.max(0, Number(run.budget_reserved) - Number(run.cost_usd));
   await c.q.query('UPDATE runs SET status = $2, failure_reason = $3, ended_at = $4 WHERE id = $1', [i.runId, finalStatus, i.reason ?? null, c.now.toISOString()]);
   let taskStatus: string | null = null;
+  if (run.task_id && run.mode === 'review') {
+    const task = await getTask(c.q, run.task_id);
+    await c.q.query('UPDATE objectives SET budget_reserved = GREATEST(0, budget_reserved - $2) WHERE id = $1', [task.objective_id, unusedReservation]);
+  }
   if (run.task_id && run.mode === 'task') {
     const task = await getTask(c.q, run.task_id);
     await c.q.query('UPDATE objectives SET budget_reserved = GREATEST(0, budget_reserved - $2) WHERE id = $1', [task.objective_id, unusedReservation]);

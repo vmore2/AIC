@@ -83,4 +83,23 @@ describe('reassignment and regression detection', () => {
     const contract = await buildTaskContract(app.ledger.db, impl.id, owner.owner_employee_id);
     expect(contract.prior_attempt_feedback.join('\n')).toMatch(/Regression: .*fails on the integration branch/s);
   }, 240_000);
+
+  it('a reviewer that keeps failing sends the task to the CEO as UNCERTAIN (no relaunch loop, budget stays consistent)', async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    const { obj } = await setup();
+    const create = app.models.create.bind(app.models);
+    app.models.create = (key, persona) => {
+      const m = create(key, persona);
+      return persona.mode === 'review' ? { profile: m.profile, generate: async () => { throw new Error('reviewer model is down'); } } : m;
+    };
+    await app.orchestrator.runUntilIdle(120_000);
+    const impl = (await app.ledger.db.query<{ id: string; status: string }>(`SELECT id, status FROM tasks WHERE parent_task_id = $1 AND title LIKE 'Deliver%'`, [obj.planningTaskId])).rows[0]!;
+    expect(impl.status).toBe('uncertain');
+    const reviews = (await app.ledger.db.query<{ status: string; budget_reserved: string }>(`SELECT status, budget_reserved FROM runs WHERE task_id = $1 AND mode = 'review'`, [impl.id])).rows;
+    expect(reviews).toHaveLength(2);
+    expect(reviews.every((r) => r.status !== 'running' && Number(r.budget_reserved) <= 100)).toBe(true);
+    const o = (await app.ledger.db.query<{ budget_reserved: string }>('SELECT budget_reserved FROM objectives WHERE id = $1', [obj.objectiveId])).rows[0]!;
+    expect(Number(o.budget_reserved)).toBe(0); // every review reservation was released
+  }, 240_000);
 });

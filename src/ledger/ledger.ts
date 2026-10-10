@@ -14,6 +14,7 @@ import * as talk from './commands/interaction.js';
 export const COMMANDS = {
   bootstrapCompany: org.bootstrapCompany,
   addUser: org.addUser,
+  setUserEmail: org.setUserEmail,
   issueAccessToken: org.issueAccessToken,
   revokeAccessToken: org.revokeAccessToken,
   hireDepartment: org.hireDepartment,

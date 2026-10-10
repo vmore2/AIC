@@ -13,22 +13,32 @@ import { DomainError, verifyChain } from '../ledger/engine.js';
 import { sha256Hex } from '../domain/hash.js';
 import { inbox, objectiveRollups, orgChart, taskDetail } from '../reports/views.js';
 import { registerTeamRoutes } from './teams.js';
+import { GoogleAuth, sessionSecret } from './auth.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 
 export async function startServer(app: App, port = 4100, host = '127.0.0.1') {
   const token = process.env['AIC_DASHBOARD_TOKEN'] ?? randomBytes(18).toString('base64url');
-  const server = buildServer(app, token);
+  const g = app.config.auth.google;
+  let google: GoogleAuth | undefined;
+  if (g) {
+    const clientSecret = process.env[g.client_secret_env];
+    if (!clientSecret) throw new Error(`Google sign-in is configured but ${g.client_secret_env} is not set (put it in .env)`);
+    google = new GoogleAuth({ clientId: g.client_id, clientSecret, publicUrl: g.public_url, allowedDomain: g.allowed_domain,
+      sessionSecret: sessionSecret(app.config.storage_path, process.env[app.config.auth.session_secret_env]) }, app.ledger.db);
+  }
+  const server = buildServer(app, token, { google });
   await app.orchestrator.recoverOrphans();
   app.orchestrator.start(750);
   await server.listen({ port, host });
   console.log(`Dashboard: http://${host}:${port}/#token=${token}`);
   console.log('This owner token acts as the CEO. Give teammates their own tokens with `aic users add`.');
+  if (google) console.log(`Google sign-in: ${google.cfg.publicUrl} (people need an email on file: aic users email <id|ceo> <email>)`);
   return server;
 }
 
 /** The HTTP app without listening (used by startServer and tests). */
-export function buildServer(app: App, token: string) {
+export function buildServer(app: App, token: string, opts: { google?: GoogleAuth } = {}) {
   const server = Fastify({ logger: false });
   const db = app.ledger.db;
   // Keep the raw JSON body (needed to verify webhook signatures), then parse it ourselves.
@@ -40,9 +50,14 @@ export function buildServer(app: App, token: string) {
   // Who is calling: the owner token (the CEO's own session, step-up) or a personal access token.
   // Roles are enforced by the policy engine on every command, not by this layer.
   const principals = new WeakMap<FastifyRequest, Principal>();
+  const viaCookie = new WeakSet<FastifyRequest>();
   const resolve = async (req: FastifyRequest): Promise<Principal | null> => {
     const given = String(req.headers['x-aic-token'] ?? '');
-    if (!given) return null;
+    if (!given) {
+      const p = opts.google ? await opts.google.principalFrom(req) : null;
+      if (p) viaCookie.add(req);
+      return p;
+    }
     if (given.length === token.length && timingSafeEqual(Buffer.from(given), Buffer.from(token))) {
       const u = (await db.query<{ id: string }>(`SELECT id FROM users WHERE role = 'ceo' LIMIT 1`)).rows[0];
       return u ? { type: 'user', id: u.id, stepUp: true } : null;
@@ -61,15 +76,22 @@ export function buildServer(app: App, token: string) {
   const key = (req: FastifyRequest) => String(req.headers['idempotency-key'] ?? newId('http'));
 
   server.addHook('onRequest', async (req, reply) => {
-    if (!req.url.startsWith('/api/') || req.url.startsWith('/api/hooks/')) return;
+    if (!req.url.startsWith('/api/') || req.url.startsWith('/api/hooks/') || req.url === '/api/auth/config') return;
     const p = await resolve(req);
-    if (!p) return reply.code(401).send({ type: 'unauthenticated', title: 'Missing or invalid access token' });
+    if (!p) return reply.code(401).send({ type: 'unauthenticated', title: 'Not signed in', google: !!opts.google });
+    // Cookie sessions: writes must come from the dashboard's own script (CSRF defense; no CORS is enabled).
+    if (viaCookie.has(req) && !['GET', 'HEAD'].includes(req.method) && req.headers['x-requested-with'] !== 'aic')
+      return reply.code(403).send({ type: 'forbidden', title: 'Missing x-requested-with header' });
     principals.set(req, p);
   });
-  server.setErrorHandler((err, _req, reply) => {
+  opts.google?.register(server);
+  server.get('/api/auth/config', async () => ({ google: !!opts.google }));
+  server.setErrorHandler((err, req, reply) => {
     if (err instanceof DomainError) {
       const status = { forbidden: 403, stale_lease: 403, not_found: 404, guard_failed: 409, conflict: 409, budget_exhausted: 409, validation: 400, idempotency_key_reuse: 422, precondition_failed: 412 }[err.code] ?? 400;
-      return reply.code(status).type('application/problem+json').send({ type: err.code, title: err.message, status, ...err.details });
+      // A Google session that isn't fresh enough for a governance action: tell the dashboard how to re-verify.
+      const stepUp = err.code === 'forbidden' && viaCookie.has(req) && !principals.get(req)?.stepUp ? { step_up_url: '/auth/google?stepup=1' } : {};
+      return reply.code(status).type('application/problem+json').send({ type: err.code, title: err.message, status, ...err.details, ...stepUp });
     }
     return reply.code(500).send({ type: 'internal', title: (err as Error).message });
   });
@@ -106,7 +128,7 @@ export function buildServer(app: App, token: string) {
   server.get('/api/me', async (req) => {
     const p = await who(req);
     const u = (await db.query<{ name: string; role: string }>('SELECT name, role FROM users WHERE id = $1', [p.id])).rows[0];
-    return { id: p.id, name: u?.name, role: u?.role, owner: !!p.stepUp };
+    return { id: p.id, name: u?.name, role: u?.role, owner: !!p.stepUp, auth: viaCookie.has(req) ? 'google' : 'token' };
   });
 
   // ---- commands (CEO)

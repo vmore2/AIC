@@ -68,9 +68,14 @@ describe.skipIf(!LIVE)('live: OpenAI (spend-capped)', () => {
     if (plan) {
       await app.ledger.run('decideProposal', { proposalId: plan.id, decision: 'approve' }, ceo);
       await app.orchestrator.runUntilIdle(900_000);
+      console.log('CEO inbox after execution:', (await inbox(app.ledger.db)).map((i) => `${i.kind}: ${i.title}`));
     }
     const tasks = (await app.ledger.db.query<{ title: string; status: string; attempt: number; assurance_label: string | null }>(
       `SELECT title, status, attempt, assurance_label FROM tasks WHERE objective_id = $1 ORDER BY kind`, [obj.objectiveId])).rows;
+    const evidence = (await app.ledger.db.query<{ statement: string; result: string; details: unknown }>(
+      `SELECT c.statement, e.result, e.details FROM evidence e JOIN criteria c ON c.id = e.criterion_id JOIN tasks t ON t.id = e.task_id
+        WHERE t.objective_id = $1 ORDER BY e.created_at`, [obj.objectiveId])).rows;
+    for (const e of evidence) console.log(`evidence [${e.result}] ${e.statement}: ${JSON.stringify(e.details).slice(0, 600)}`);
     const spent = guard.spent(SpendGuard.keyId(NANO)) - startSpend;
     console.log('tasks:', tasks, `\nspent this run: $${spent.toFixed(4)}; lifetime $${guard.spent(SpendGuard.keyId(NANO)).toFixed(4)} of $${guard.capUsd}`);
     // Whatever the model achieved, the platform must never report unverified success.

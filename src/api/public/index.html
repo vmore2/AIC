@@ -28,7 +28,8 @@
   table { width:100%; border-collapse:collapse; }
   td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { font-weight:600; color:var(--muted); font-size:12px; }
-  button.act { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button.act, a.btn { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  a.btn { display:inline-block; text-decoration:none; }
   button.sec { background:none; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
   textarea, input, select { width:100%; font:inherit; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
   .chat { display:flex; flex-direction:column; gap:10px; }
@@ -57,8 +58,11 @@
 const TOKEN = (location.hash.match(/token=([^&]+)/) || [])[1] || sessionStorage.getItem('aic-token') || '';
 if (TOKEN) { sessionStorage.setItem('aic-token', TOKEN); history.replaceState(null, '', location.pathname); }
 const api = async (p, opts = {}) => {
-  const r = await fetch(p, { ...opts, headers: { 'content-type': 'application/json', 'x-aic-token': TOKEN, 'idempotency-key': crypto.randomUUID(), ...(opts.headers || {}) } });
+  const auth = TOKEN ? { 'x-aic-token': TOKEN } : { 'x-requested-with': 'aic' };
+  const r = await fetch(p, { ...opts, headers: { 'content-type': 'application/json', ...auth, 'idempotency-key': crypto.randomUUID(), ...(opts.headers || {}) } });
   const body = await r.json().catch(() => ({}));
+  // Governance actions need a fresh Google sign-in: re-verify, then the CEO repeats the action.
+  if (r.status === 403 && body.step_up_url) { location.href = body.step_up_url; throw new Error('Confirming it is you — redirecting to Google…'); }
   if (!r.ok) throw new Error(body.title || r.statusText);
   return body;
 };
@@ -367,8 +371,17 @@ async function saveDraft(hire) {
   }
 }
 
-api('/api/me').then((m) => { document.getElementById('me').textContent = `${m.name} · ${m.role}${m.owner ? ' (owner)' : ''}`; })
-  .catch(() => { view.innerHTML = '<div class="card">Sign in: open the dashboard link with your access token (…/#token=YOUR_TOKEN).</div>'; });
+async function signOut() { await api('/auth/logout', { method: 'POST', body: '{}' }).catch(() => null); sessionStorage.removeItem('aic-token'); location.href = '/'; }
+api('/api/me').then((m) => {
+  const me = document.getElementById('me');
+  me.innerHTML = `${esc(m.name)} · ${esc(m.role)}${m.owner ? ' (owner)' : ''} <a href="#" id="signout">sign out</a>`;
+  document.getElementById('signout').onclick = (e) => { e.preventDefault(); signOut(); };
+}).catch(async () => {
+  const cfg = await fetch('/api/auth/config').then((r) => r.json()).catch(() => ({}));
+  view.innerHTML = `<div class="card"><h3>Sign in</h3>
+    ${cfg.google ? '<p><a class="btn" href="/auth/google">Sign in with Google</a></p><p class="muted">Your CEO must have added your email.</p>' : ''}
+    <p class="muted">Or open the dashboard link with your access token (…/#token=YOUR_TOKEN).</p></div>`;
+});
 renderNav(); refresh(); setInterval(() => { if (['Overview', 'Inbox', 'Org', 'Audit'].includes(current)) refresh(); }, 4000);
 </script>
 </body>

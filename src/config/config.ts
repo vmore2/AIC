@@ -64,6 +64,20 @@ export const ConfigSchema = z.object({
   teams_path: z.string().default('teams'),
   /** Extra Cedar policies (baseline forbids cannot be weakened). */
   policies_path: z.string().default('policies'),
+  /**
+   * Dashboard sign-in. Access tokens always work; Google sign-in is optional and uses the CEO's own
+   * OAuth client (Google Cloud console → Credentials → OAuth client ID → Web application).
+   */
+  auth: z.object({
+    google: z.object({
+      client_id: z.string().min(10),
+      client_secret_env: z.string().default('GOOGLE_CLIENT_SECRET'),
+      /** Must match the authorized redirect URI: <public_url>/auth/google/callback */
+      public_url: z.string().url().default('http://localhost:4100'),
+      allowed_domain: z.string().optional(),
+    }).optional(),
+    session_secret_env: z.string().default('AIC_SESSION_SECRET'),
+  }).default({}),
   /** Signs run credentials; supply via env in production. */
   credential_secret_env: z.string().default('AIC_CREDENTIAL_SECRET'),
 });
@@ -144,4 +158,14 @@ sandbox:
   allow_unisolated_local: true
   # kind: docker
   # docker: { image: node:22-bookworm-slim, memory: 2g, cpus: 2, network: none }
+
+# Dashboard sign-in. Access tokens always work. To let people sign in with Google, create an OAuth
+# client (Web application) in YOUR Google Cloud project, add the redirect URI
+# http://localhost:4100/auth/google/callback, put the secret in .env as GOOGLE_CLIENT_SECRET, and
+# give each person an email: aic users email ceo you@example.com
+# auth:
+#   google:
+#     client_id: 1234-abc.apps.googleusercontent.com
+#     public_url: http://localhost:4100
+#     allowed_domain: example.com      # optional: only accounts from this Google Workspace domain
 `;

@@ -38,6 +38,14 @@ R2+ rubric criteria only count reviews whose model family differs from the produ
 
 Budgets use the `price_per_million` you configure. The platform never hard-codes vendor prices.
 
+**Lifetime spend cap.** Set `AIC_SPEND_CAP_USD` (for example `AIC_SPEND_CAP_USD=2.00` in `.env`) to
+cap the total spend of each API key across every run, test and process. Before each call the platform
+checks the worst case (estimated input plus maximum output). It refuses the call if the call could
+cross the cap. Actual usage is recorded in `~/.aic/spend-ledger.json` (override with
+`AIC_SPEND_LEDGER`). The ledger stores only a hash prefix of each key, never the key itself. Real
+providers without prices are refused while a cap is set, because the cap couldn't be enforced. Also
+set a budget limit in your provider's console as a backstop.
+
 ## 3. Code and deliverables hosting
 
 All departments deliver versioned files. Engineering delivers code; the other departments deliver
@@ -105,9 +113,39 @@ aic users add "Sam Lee" --role viewer       # read-only
 aic users revoke <user-or-token-id>
 ```
 
-Roles are enforced by the policy engine on every action, and governance (hiring, modes, emergency
-stop, team definitions) requires the owner session. For a shared deployment, put the dashboard behind
-your SSO with MFA.
+Roles are enforced by the policy engine on every action. Governance (hiring, modes, emergency
+stop, team definitions) requires the owner session or a fresh Google sign-in.
+
+### Sign in with Google (optional)
+
+People can sign in with their Google account instead of a token. Only emails the CEO added get in.
+Google proves the email; the platform decides what that person may do.
+
+1. In **your** Google Cloud project: APIs & Services → Credentials → Create credentials → OAuth client
+   ID → *Web application*. Add the authorized redirect URI `http://localhost:4100/auth/google/callback`.
+   Use your public URL instead if you serve the dashboard elsewhere; production must use `https://`.
+2. Put the secret in `.env`: `GOOGLE_CLIENT_SECRET=...`. Optionally set `AIC_SESSION_SECRET`;
+   otherwise a key is generated into your storage directory.
+3. Add to `aic.config.yaml`:
+   ```yaml
+   auth:
+     google:
+       client_id: 1234-abc.apps.googleusercontent.com
+       public_url: http://localhost:4100
+       # allowed_domain: example.com   # only accounts from your Google Workspace domain
+   ```
+4. Give each person an email: `aic users email ceo you@example.com` and
+   `aic users add "Ava Patel" --role approver --email ava@example.com`.
+
+How it works:
+- **Sign-in flow.** Authorization code with PKCE, plus state and nonce checks. The ID token is
+  fetched directly from Google's token endpoint, and its issuer, audience, expiry, nonce and verified
+  email are all checked.
+- **Sessions.** Sessions are HMAC-signed, HttpOnly, SameSite=Lax cookies lasting 12 hours.
+- **CSRF protection.** Dashboard writes made with a session cookie must carry the dashboard's own
+  `x-requested-with` header, and the server enables no CORS.
+- **Step-up for governance.** Governance needs a sign-in from the last 15 minutes. Otherwise the
+  dashboard sends you back to Google to re-authenticate (`max_age=0`), and you repeat the action.
 
 ## CI as a regression signal
 
@@ -130,6 +168,7 @@ tells you what to fix before production.
 - [ ] Isolated sandbox implemented; `allow_unisolated_local` disabled
 - [ ] Code host with branch protection on the base branch; least-privilege token
 - [ ] `AIC_CREDENTIAL_SECRET` set from your secret manager
-- [ ] Dashboard behind SSO + MFA; `AIC_DASHBOARD_TOKEN` set
+- [ ] Google sign-in (or your SSO) with MFA on the Google accounts; dashboard served over HTTPS; `AIC_DASHBOARD_TOKEN` and `AIC_SESSION_SECRET` set
+- [ ] `AIC_SPEND_CAP_USD` and a provider-side budget limit
 - [ ] Operating modes chosen per department (finance, legal, people ops default to Supervised)
 - [ ] `aic audit` scheduled; alerts on failure

@@ -25,9 +25,25 @@ export const bootstrapCompany: Handler<{ companyName: string; ceoName: string; c
 export const addUser: Handler<{ name: string; email?: string; role: 'admin' | 'approver' | 'member' | 'viewer' | 'auditor' }, { userId: string }> = async (c, i) => {
   await c.authorize('employee.hire', { type: 'Company', id: 'company' }, {});
   const userId = newId('usr');
-  await c.q.query('INSERT INTO users (id, name, email, role) VALUES ($1,$2,$3,$4)', [userId, i.name, i.email ?? null, i.role]);
+  const email = i.email?.trim().toLowerCase() || null;
+  if (email && (await c.q.query('SELECT 1 FROM users WHERE lower(email) = $1', [email])).rows.length) throw new DomainError('conflict', `${email} already belongs to another user`);
+  await c.q.query('INSERT INTO users (id, name, email, role) VALUES ($1,$2,$3,$4)', [userId, i.name, email, i.role]);
   c.emit({ type: 'user.added', aggregateType: 'user', aggregateId: userId, payload: { name: i.name, role: i.role } });
   return { userId };
+};
+
+/** Set the email a person signs in with (Google sign-in maps verified emails to users). */
+export const setUserEmail: Handler<{ userId: string; email: string }, { userId: string }> = async (c, i) => {
+  await c.authorize('employee.hire', { type: 'Company', id: 'company' }, {});
+  const email = i.email.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new DomainError('validation', `"${i.email}" is not an email address`);
+  const u = (await c.q.query<{ id: string }>('SELECT id FROM users WHERE id = $1', [i.userId])).rows[0];
+  if (!u) throw new DomainError('not_found', `User ${i.userId} not found`);
+  const taken = (await c.q.query<{ id: string }>('SELECT id FROM users WHERE lower(email) = $1 AND id <> $2', [email, i.userId])).rows[0];
+  if (taken) throw new DomainError('conflict', `${email} already belongs to another user`);
+  await c.q.query('UPDATE users SET email = $2 WHERE id = $1', [i.userId, email]);
+  c.emit({ type: 'user.email_set', aggregateType: 'user', aggregateId: i.userId, payload: { email } });
+  return { userId: i.userId };
 };
 
 /** Check a model profile can serve a role (architecture.md §9.7). */
