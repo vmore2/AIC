@@ -95,7 +95,7 @@ export async function buildReviewContext(q: Queryable, taskId: string, submissio
     `SELECT cr.statement, e.result, e.independence FROM evidence e JOIN criteria cr ON cr.id = e.criterion_id WHERE e.submission_id = $1`, [submissionId]);
   const rubric = contract.acceptance_criteria.filter((c) => c.kind === 'rubric_review');
   return {
-    you_review: 'Judge ONLY the rubric criteria listed under criteria_to_judge, against the verbatim requirements. Cite a location for every finding. Call review.record_verdict once with a verdict for each criterion.',
+    you_review: 'Judge ONLY the rubric criteria listed under criteria_to_judge, against the verbatim requirements, by reading the change. deterministic_results are checks the platform itself ran on THIS exact commit (e.g. the test suite ran in a sandbox): treat them as fact and do not re-judge or contradict them. Cite a file/line location in the change for every finding. Call review.record_verdict once with a verdict for each criterion.',
     task: contract.task, requirements: contract.requirements, constraints: contract.constraints,
     criteria_to_judge: rubric.map((c) => ({ id: c.id, statement: c.statement })),
     deterministic_results: evidence.rows,
