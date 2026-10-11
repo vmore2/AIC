@@ -179,7 +179,7 @@ CEO ⇄ Team Lead (conversation) → proposal (directive) → CEO confirms (hash
 ## Tests
 
 ```bash
-npm test          # 84 tests (Docker tests run when Docker is available): property-based state machine, ledger invariants, gateway red-team, team specs,
+npm test          # 97 tests (Docker tests run when Docker is available): property-based state machine, ledger invariants, gateway red-team, team specs,
                   # requirement changes, model adapters, Docker sandbox posture, conversations, end-to-end
 npm run typecheck
 ```
@@ -208,10 +208,24 @@ Known gaps, deliberately documented:
   horizontal scale-out (Temporal adapter, architecture.md §4.3) is future work.
 - **Local CLI = trusted CEO session.** The dashboard supports Google sign-in (tested against a mock
   Google; see docs/connect-your-infrastructure.md). Serve it over HTTPS when it isn't on localhost.
-- **Real models** are tested opt-in (`AIC_LIVE=1`) against OpenAI under a lifetime spend cap
-  (`AIC_SPEND_CAP_USD`). A cheap model (gpt-4.1-nano) plans and implements real objectives, and the
-  platform catches its mistakes. For example, a plan with only analysis tasks is refused, and a
-  review that keeps failing goes to the CEO as uncertain instead of passing.
+- **Real models** are tested opt-in (`AIC_LIVE=1`, `test/live*.test.ts`) against OpenAI under a
+  lifetime spend cap (`AIC_SPEND_CAP_USD`).
+  - **Results:** a 4-requirement engineering objective and a Product Design objective both complete
+    end to end on gpt-4.1-mini. Each costs a few cents.
+  - **Model size matters:** gpt-4.1-nano can do small tasks, but it struggles to plan multi-requirement
+    work, so give leads a stronger model (per-role models exist for this).
+  - **Mistakes the platform now catches:** each was found in these live runs and is covered by a
+    regression test.
+    - test runs that executed zero tests;
+    - files a requirement names but that are missing from the delivered work;
+    - QA tests that check a mock instead of the real code;
+    - work put in the wrong file;
+    - accepted work that never merged;
+    - uncheckable "automatic" criteria;
+    - questions nobody answers;
+    - parallel reviews starving each other's budget;
+    - stray NUL bytes in tool output.
+  - **Practical advice:** concrete requirements that name files produce the most reliable results.
 - **Scripted model** handles only demo scenarios; real work needs a customer model profile.
 - Built since the first version:
   - requirement changes;
@@ -219,6 +233,11 @@ Known gaps, deliberately documented:
   - regression detection, both on the integration branch after each merge and from your CI through a
     signed webhook;
   - team access tokens (approver, viewer, auditor) and Google sign-in;
+  - CEO instructions for the whole company, a team, a role, or one employee (versioned; they never grant
+    permissions, and requirements win on conflict);
+  - leads answer their team's questions automatically, and anything they can't decide goes to the CEO;
+  - running the company alone from the dashboard: new objectives, retry or cancel failed work,
+    oversight level per team, and desktop alerts;
   - CEO-managed models and keys (any provider, encrypted vault), tech stack, and databases that
     employees request and you connect, tested live against PostgreSQL 16 and MySQL 8.4;
   - a redesigned dashboard with:
