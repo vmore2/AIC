@@ -145,12 +145,18 @@ export async function orgChart(q: Queryable) {
             (SELECT count(*) FROM submissions s JOIN tasks t2 ON t2.id = s.task_id WHERE t2.owner_employee_id = t.owner_employee_id) AS submissions
      FROM tasks t WHERE t.owner_employee_id IS NOT NULL GROUP BY t.owner_employee_id`);
   const byEmp = new Map(stats.rows.map((s) => [s.owner, s]));
+  // Live status for the company floor: running a model right now / waiting on a human.
+  const working = new Set((await q.query<{ employee_id: string }>(`SELECT DISTINCT employee_id FROM runs WHERE status = 'running'`)).rows.map((r) => r.employee_id));
+  const waiting = new Set((await q.query<{ owner: string }>(`SELECT DISTINCT owner_employee_id AS owner FROM tasks WHERE status = 'awaiting_input'`)).rows.map((r) => r.owner));
+  const titles = await q.query<{ id: string; title: string }>(`SELECT id, role_snapshot->>'title' AS title FROM employees`);
+  const titleOf = new Map(titles.rows.map((r) => [r.id, r.title]));
   return deps.rows.map((d) => ({
     ...d,
     employees: emps.rows.filter((e) => e.department_id === d.id).map((e) => {
       const s = byEmp.get(e.id);
       const subs = Number(s?.submissions ?? 0);
-      return { ...e, accepted: Number(s?.accepted ?? 0), active: Number(s?.active ?? 0),
+      return { ...e, role_title: titleOf.get(e.id) ?? e.role_key, state: working.has(e.id) ? 'working' : waiting.has(e.id) ? 'waiting' : 'idle',
+        accepted: Number(s?.accepted ?? 0), active: Number(s?.active ?? 0),
         reworkRate: subs ? Math.round((100 * Number(s?.rejected_claims ?? 0)) / subs) : null };
     }),
   }));

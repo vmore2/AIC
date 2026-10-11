@@ -61,7 +61,7 @@ describe.skipIf(!dockerUp)('connections: an employee asks for a database, the CE
     const server = buildServer(app, 'owner');
     const api = async (method: 'GET' | 'POST', url: string, payload?: unknown) => {
       const r = await server.inject({ method, url, payload: payload as object, headers: { 'x-aic-token': 'owner', 'content-type': 'application/json' } });
-      return { status: r.statusCode, body: r.json() as Record<string, unknown> & Record<string, never> };
+      return { status: r.statusCode, body: r.json() as Record<string, any> };
     };
 
     // The CEO picks the stack: every task contract carries it.

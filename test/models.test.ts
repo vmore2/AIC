@@ -46,7 +46,7 @@ describe('CEO-managed models and keys', () => {
     const server = buildServer(app, 'owner');
     const api = async (method: 'GET' | 'POST', url: string, payload?: unknown) => {
       const r = await server.inject({ method, url, payload: payload as object, headers: { 'x-aic-token': 'owner', 'content-type': 'application/json' } });
-      return { status: r.statusCode, body: r.json() as Record<string, unknown> & Record<string, never>, raw: r.body };
+      return { status: r.statusCode, body: r.json() as Record<string, any>, raw: r.body };
     };
     const base = await mockProvider();
 

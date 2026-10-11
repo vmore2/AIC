@@ -60,8 +60,9 @@ export function registerSetupRoutes(server: FastifyInstance, app: App, h: Helper
       { key: 'people', title: 'Invite your people', done: people > 1, detail: people > 1 ? `${people} people can sign in` : 'Approvers and viewers sign in with Google.' },
       { key: 'brief', title: 'Brief a team lead', done: objectives > 0, detail: objectives ? `${objectives} objective(s)` : 'Tell a lead what you want; they come back with a plan.' },
     ];
+    const stopped = (await db.query<{ mode: string }>(`SELECT mode FROM mode_settings WHERE scope_type = 'company'`)).rows[0]?.mode === 'M6';
     return {
-      steps, role, default_model: s['default_model'] ?? app.config.models.default,
+      steps, role, stopped, default_model: s['default_model'] ?? app.config.models.default,
       spend_cap_usd: SpendGuard.fromEnv()?.capUsd ?? null,
       code_host: app.config.code_hosting.kind, sandbox: app.config.sandbox.kind,
       connections: { active: conns.filter((c) => c.status === 'active').length, requested: conns.filter((c) => c.status === 'requested').length },

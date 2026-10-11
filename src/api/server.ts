@@ -98,6 +98,9 @@ export function buildServer(app: App, token: string, opts: { google?: GoogleAuth
   });
 
   server.get('/', async (_req, reply: FastifyReply) => reply.type('text/html').send(readFileSync(path.join(PUBLIC, 'index.html'), 'utf8')));
+  // The dashboard's own assets (no CDN: customer installs work offline).
+  for (const [file, type] of [['app.css', 'text/css'], ['app.js', 'text/javascript']] as const)
+    server.get(`/${file}`, async (_req, reply: FastifyReply) => reply.type(`${type}; charset=utf-8`).header('cache-control', 'no-cache').send(readFileSync(path.join(PUBLIC, file), 'utf8')));
 
   // ---- queries (derived views computed from the ledger)
   server.get('/api/status', async () => ({ company: (await db.query('SELECT name FROM company')).rows[0], objectives: await objectiveRollups(db), activeRuns: app.orchestrator.activeRuns }));
@@ -110,7 +113,13 @@ export function buildServer(app: App, token: string, opts: { google?: GoogleAuth
     (await db.query(`SELECT t.id, t.title, t.kind, t.status, t.hold, t.attempt, t.assurance_label, e.display_name AS owner, t.objective_id
                      FROM tasks t LEFT JOIN employees e ON e.id = t.owner_employee_id ${req.query.objective ? 'WHERE t.objective_id = $1' : ''} ORDER BY t.created_at`,
       req.query.objective ? [req.query.objective] : [])).rows);
-  server.get('/api/events', async () => (await db.query('SELECT seq, type, aggregate_id, actor, payload, occurred_at FROM ledger_events ORDER BY seq DESC LIMIT 60')).rows);
+  server.get<{ Querystring: { limit?: string } }>('/api/events', async (req) => (await db.query(
+    `SELECT e.seq, e.type, e.aggregate_id, e.actor, e.payload, e.occurred_at,
+       coalesce((SELECT title FROM tasks WHERE id = e.aggregate_id), (SELECT title FROM objectives WHERE id = e.aggregate_id),
+                (SELECT display_name FROM employees WHERE id = e.aggregate_id), (SELECT name FROM connections WHERE id = e.aggregate_id)) AS subject,
+       CASE e.actor->>'type' WHEN 'employee' THEN (SELECT display_name FROM employees WHERE id = e.actor->>'id')
+                             WHEN 'user' THEN (SELECT name FROM users WHERE id = e.actor->>'id') ELSE 'Platform' END AS actor_name
+     FROM ledger_events e ORDER BY e.seq DESC LIMIT $1`, [Math.min(500, Math.max(1, Number(req.query.limit) || 60))])).rows);
   server.get('/api/audit', async () => verifyChain(db));
   // CI webhook: authenticated by an HMAC signature over the raw body (set AIC_CI_WEBHOOK_SECRET in CI and here).
   server.post('/api/hooks/ci', { config: { rawBody: true } }, async (req, reply) => {
@@ -159,10 +168,12 @@ export function buildServer(app: App, token: string, opts: { google?: GoogleAuth
   // ---- commands (CEO)
   server.post<{ Params: { id: string }; Body: { decision: 'approve' | 'request_changes'; rationale?: string } }>('/api/proposals/:id/decision', async (req) =>
     app.ledger.run('decideProposal', { proposalId: req.params.id, decision: req.body.decision, rationale: req.body.rationale }, await who(req), key(req)));
-  server.post<{ Params: { id: string }; Body: { rationale?: string } }>('/api/tasks/:id/accept', async (req) => {
+  server.post<{ Params: { id: string }; Body: { rationale?: string; uncertain?: boolean } }>('/api/tasks/:id/accept', async (req) => {
     const sub = (await db.query<{ submission_sha256: string }>(`SELECT submission_sha256 FROM submissions WHERE task_id = $1 AND status = 'open'`, [req.params.id])).rows[0];
     if (!sub) throw new DomainError('guard_failed', 'No open submission');
-    return app.ledger.run('acceptTask', { taskId: req.params.id, submissionSha256: sub.submission_sha256, rationale: req.body?.rationale }, await who(req), key(req));
+    // Accepting an UNCERTAIN outcome is a separate, explicitly-labeled decision (needs a rationale).
+    if (req.body?.uncertain && !req.body.rationale?.trim()) throw new DomainError('validation', 'Say why you accept work whose correctness could not be verified');
+    return app.ledger.run('acceptTask', { taskId: req.params.id, submissionSha256: sub.submission_sha256, rationale: req.body?.rationale, uncertain: !!req.body?.uncertain }, await who(req), key(req));
   });
   server.post<{ Params: { id: string }; Body: { rationale: string } }>('/api/tasks/:id/reject', async (req) =>
     app.ledger.run('rejectTask', { taskId: req.params.id, rationale: req.body.rationale }, await who(req), key(req)));
@@ -175,6 +186,15 @@ export function buildServer(app: App, token: string, opts: { google?: GoogleAuth
   });
   server.post<{ Params: { id: string }; Body: { reason?: string } }>('/api/directives/:id/decline', async (req) =>
     app.ledger.run('rejectDirective', { directiveId: req.params.id, reason: req.body?.reason ?? 'declined' }, await who(req), key(req)));
+  server.get<{ Params: { employee: string } }>('/api/chat/:employee', async (req) => {
+    await who(req);
+    const conv = (await db.query<{ id: string }>('SELECT id FROM conversations WHERE employee_id = $1 ORDER BY created_at DESC LIMIT 1', [req.params.employee])).rows[0];
+    if (!conv) return { messages: [], directives: [] };
+    return {
+      messages: (await db.query(`SELECT author_type, body, created_at FROM messages WHERE conversation_id = $1 ORDER BY seq DESC LIMIT 60`, [conv.id])).rows.reverse(),
+      directives: (await db.query(`SELECT id, directive_type, payload, status, created_at FROM directives WHERE conversation_id = $1 ORDER BY created_at`, [conv.id])).rows,
+    };
+  });
   server.post<{ Body: { employee: string; message: string } }>('/api/chat', async (req) => {
     const emp = (await db.query<{ id: string; display_name: string }>(`SELECT id, display_name FROM employees WHERE id = $1 OR role_key = $1 ORDER BY created_at LIMIT 1`, [req.body.employee])).rows[0];
     if (!emp) throw new DomainError('not_found', 'Employee not found');

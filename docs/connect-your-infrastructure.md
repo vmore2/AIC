@@ -23,8 +23,23 @@ with `aic audit`, which recomputes the hash chain.
 
 ## 2. Model providers
 
-Each role can use a different model. Keys are referenced by environment-variable name and are never
-written to config files or the ledger.
+**Easiest: the dashboard.** Open **Setup → AI models → Add a provider** and pick one:
+- OpenAI
+- Anthropic
+- Google Gemini
+- OpenRouter
+- Groq
+- Ollama on your own machine
+- any OpenAI-compatible endpoint
+
+Paste your key. It's checked for free (by listing the provider's models), then encrypted into your
+own storage (`<storage>/secrets.vault.json`, key in `master.key` or `AIC_MASTER_KEY`). The ledger keeps
+only a fingerprint. Pick the models your employees may use and confirm their prices; the spend cap
+needs them. Star one as the default for new hires, and change any role's model under **Who uses which
+model**.
+
+You can also configure models in `aic.config.yaml`. There, each role can use a different model, and
+keys are referenced by environment-variable name and never written to config files or the ledger.
 
 | Provider | `provider` | Notes |
 |---|---|---|
@@ -69,6 +84,28 @@ Employees work only on `aic/<task>/<run>` branches. Accepted work merges into
 `aic/<objective>/integration`. Merging into `main` happens only after the CEO approves a release
 (`aic release`), and that approval is bound to the exact integration commit. Protect `main` with
 branch protection so only the platform's release step can merge.
+
+## 3b. Databases your teams use
+
+Choose your stack (language, framework, database) in **Setup → Tech stack**; every task carries it.
+
+**How a database gets connected:**
+1. When an employee needs a database, it calls `connections.request`. Its task pauses, and your
+   **Decisions** show a card with a form.
+2. Enter the host, port, database, user and password, and pick read-only or read & write.
+3. The platform tests the login live, encrypts the password into your vault, and the task resumes.
+
+You can also add a database in advance under **Setup → Databases**. PostgreSQL and MySQL are supported.
+
+**How employees use it.** Employees never see the password. They use:
+- `db.schema` to see tables and columns;
+- `db.query` to read. Each query is one statement, run in a read-only transaction that is always
+  rolled back, with a 10-second timeout and at most 200 rows;
+- `db.execute` to write, only on read & write connections. It's audited as an external action with
+  the exact SQL.
+
+The platform, not the sandbox, connects to the database. Agent code in the sandbox still has no
+network.
 
 ## 4. Sandbox (required for production)
 

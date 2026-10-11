@@ -179,7 +179,7 @@ CEO ⇄ Team Lead (conversation) → proposal (directive) → CEO confirms (hash
 ## Tests
 
 ```bash
-npm test          # 81 tests (Docker tests run when Docker is available): property-based state machine, ledger invariants, gateway red-team, team specs,
+npm test          # 84 tests (Docker tests run when Docker is available): property-based state machine, ledger invariants, gateway red-team, team specs,
                   # requirement changes, model adapters, Docker sandbox posture, conversations, end-to-end
 npm run typecheck
 ```
@@ -219,6 +219,16 @@ Known gaps, deliberately documented:
   - regression detection, both on the integration branch after each merge and from your CI through a
     signed webhook;
   - team access tokens (approver, viewer, auditor) and Google sign-in;
+  - CEO-managed models and keys (any provider, encrypted vault), tech stack, and databases that
+    employees request and you connect, tested live against PostgreSQL 16 and MySQL 8.4;
+  - a redesigned dashboard with:
+    - a decision deck with keyboard shortcuts;
+    - a live company floor;
+    - objective pipelines and task boards;
+    - chat with proposal cards;
+    - guided setup;
+    - a command palette (Ctrl K);
+    - hold-to-stop;
   - a lifetime spend cap per provider key;
   - curated team notes;
   - GitHub releases through a pinned pull request (tested against simulated GitHub responses; not
