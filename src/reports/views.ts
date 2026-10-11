@@ -134,7 +134,9 @@ export async function taskDetail(q: Queryable, taskId: string): Promise<TaskDeta
 }
 
 export async function orgChart(q: Queryable) {
-  const deps = await q.query<{ id: string; key: string; name: string; default_mode: string }>('SELECT id, key, name, default_mode FROM departments ORDER BY created_at');
+  const deps = await q.query<{ id: string; key: string; name: string; default_mode: string; mode: string }>(
+    `SELECT d.id, d.key, d.name, d.default_mode, coalesce(m.mode, d.default_mode) AS mode FROM departments d
+     LEFT JOIN mode_settings m ON m.scope_type = 'department' AND m.scope_id = d.id ORDER BY d.created_at`);
   const emps = await q.query<{ id: string; display_name: string; role_key: string; category: string; department_id: string; manager_employee_id: string | null; model_profile: string; status: string }>(
     'SELECT id, display_name, role_key, category, department_id, manager_employee_id, model_profile, status FROM employees ORDER BY created_at');
   const stats = await q.query<{ owner: string; accepted: string; active: string; rejected_claims: string; submissions: string }>(

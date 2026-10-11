@@ -4,7 +4,7 @@
 import type { Queryable } from '../ledger/db.js';
 import { getCriteria, getEmployee, getObjective, getTask } from '../ledger/store.js';
 import type { Department } from '../org/schema.js';
-import { stackFrom, type Stack } from '../ledger/commands/setup.js';
+import { instructionsFor, stackFrom, type Stack } from '../ledger/commands/setup.js';
 
 export interface TaskContract {
   task: { id: string; kind: string; title: string; spec: string; risk_tier: string; attempt: number; max_attempts: number };
@@ -16,6 +16,8 @@ export interface TaskContract {
   team_knowledge: { note: string; kind: string; id: string }[];
   budget: { task_limit_usd: number; task_spent_usd: number };
   permissions: string[];
+  /** Standing instructions from the CEO (company → team → role → you). Follow them; requirements win on conflict. */
+  ceo_instructions: { from: string; text: string }[];
   /** Technology the CEO chose for this company; follow it unless a requirement says otherwise. */
   project_stack: Stack;
   /** Databases the CEO connected for your team. You never see credentials: use the db.* tools with the id. */
@@ -65,6 +67,7 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
       [emp.department_id])).rows.map((r) => ({ id: r.id, kind: r.kind, note: `${r.body} (advisory team note; the requirements and criteria above take precedence)` })),
     budget: { task_limit_usd: Number(task.budget_limit), task_spent_usd: Number(task.budget_spent) },
     permissions: (task.tool_grants as string[]).filter((t) => emp.tool_grants.includes(t)),
+    ceo_instructions: await instructionsFor(q, employeeId),
     project_stack: stackFrom((await q.query<{ settings: Record<string, string> }>('SELECT settings FROM company')).rows[0]?.settings ?? {}),
     databases: await teamDatabases(q, emp.department_id),
     how_to_finish: task.kind === 'planning'
@@ -102,7 +105,7 @@ export async function teamDatabases(q: Queryable, departmentId: string) {
 }
 
 /** Context for an independent reviewer: the artifact and the contract, never the producer's reasoning or claims. */
-export async function buildReviewContext(q: Queryable, taskId: string, submissionId: string, diff: string) {
+export async function buildReviewContext(q: Queryable, taskId: string, submissionId: string, diff: string, reviewerId?: string) {
   const contract = await buildTaskContract(q, taskId, (await getTask(q, taskId)).owner_employee_id!);
   const evidence = await q.query<{ statement: string; result: string; independence: string }>(
     `SELECT cr.statement, e.result, e.independence FROM evidence e JOIN criteria cr ON cr.id = e.criterion_id WHERE e.submission_id = $1`, [submissionId]);
@@ -111,6 +114,8 @@ export async function buildReviewContext(q: Queryable, taskId: string, submissio
     you_review: 'Judge ONLY the rubric criteria listed under criteria_to_judge, against the verbatim requirements, by reading the change. deterministic_results are checks the platform itself ran on THIS exact commit (e.g. the test suite ran in a sandbox): treat them as fact and do not re-judge or contradict them. Cite a file/line location in the change for every finding. Call review.record_verdict once with a verdict for each criterion.',
     task: contract.task, requirements: contract.requirements, constraints: contract.constraints,
     criteria_to_judge: rubric.map((c) => ({ id: c.id, statement: c.statement })),
+    // The reviewer's own standing instructions from the CEO (never the author's).
+    ceo_instructions: reviewerId ? await instructionsFor(q, reviewerId) : [],
     deterministic_results: evidence.rows,
     change: diff.slice(0, 60_000),
   };

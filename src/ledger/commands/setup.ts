@@ -213,3 +213,54 @@ export const revokeConnection: Handler<{ connectionId: string }, { secretId: str
   return { secretId: row.secret_id };
 };
 
+
+// ---------------------------------------------------------------------------- instructions
+
+export type InstructionScope = 'company' | 'department' | 'role' | 'employee';
+
+/**
+ * Set (or clear, with an empty body) the CEO's standing instructions for a scope. History is kept:
+ * the previous version is superseded, never edited. Governance: CEO/admin with a fresh sign-in.
+ */
+export const setInstructions: Handler<{ scopeType: InstructionScope; departmentKey?: string; roleKey?: string; employeeId?: string; body: string }, { scopeId: string; version: number | null }> =
+  async (c, i) => {
+    await c.authorize('company.configure', { type: 'Company', id: 'company' }, { action_class: 'A6' });
+    const body = i.body.trim();
+    if (body.length > 4000) throw new DomainError('validation', 'Keep instructions under 4,000 characters');
+    let scopeId: string;
+    if (i.scopeType === 'company') scopeId = (await c.q.query<{ id: string }>('SELECT id FROM company')).rows[0]!.id;
+    else if (i.scopeType === 'employee') {
+      const e = (await c.q.query<{ id: string }>('SELECT id FROM employees WHERE id = $1', [i.employeeId ?? ''])).rows[0];
+      if (!e) throw new DomainError('not_found', 'Employee not found');
+      scopeId = e.id;
+    } else {
+      const d = (await c.q.query<{ id: string }>('SELECT id FROM departments WHERE key = $1', [i.departmentKey ?? ''])).rows[0];
+      if (!d) throw new DomainError('not_found', `Team ${i.departmentKey} is not hired`);
+      if (i.scopeType === 'role') {
+        const r = (await c.q.query('SELECT 1 FROM employees WHERE department_id = $1 AND role_key = $2 LIMIT 1', [d.id, i.roleKey ?? ''])).rows[0];
+        if (!r) throw new DomainError('not_found', `No ${i.roleKey} in ${i.departmentKey}`);
+        scopeId = `${d.id}:${i.roleKey}`;
+      } else scopeId = d.id;
+    }
+    const prev = (await c.q.query<{ version: number }>(`SELECT version FROM instructions WHERE scope_type = $1 AND scope_id = $2 ORDER BY version DESC LIMIT 1`, [i.scopeType, scopeId])).rows[0];
+    await c.q.query(`UPDATE instructions SET status = $3 WHERE scope_type = $1 AND scope_id = $2 AND status = 'active'`, [i.scopeType, scopeId, body ? 'superseded' : 'removed']);
+    const version = body ? (prev?.version ?? 0) + 1 : null;
+    if (body) await c.q.query(`INSERT INTO instructions (id, scope_type, scope_id, body, version, status, set_by) VALUES ($1,$2,$3,$4,$5,'active',$6)`,
+      [newId('ins'), i.scopeType, scopeId, body, version, c.principal.id]);
+    c.emit({ type: body ? 'instructions.set' : 'instructions.cleared', aggregateType: 'instructions', aggregateId: `${i.scopeType}:${scopeId}`,
+      payload: { scope_type: i.scopeType, scope_id: scopeId, version, preview: body.slice(0, 200) } });
+    return { scopeId, version };
+  };
+
+/** The instructions that apply to one employee, broadest first (company → team → role → them). */
+export async function instructionsFor(q: Parameters<Handler<unknown, unknown>>[0]['q'], employeeId: string): Promise<{ from: string; text: string }[]> {
+  const e = (await q.query<{ department_id: string; role_key: string }>('SELECT department_id, role_key FROM employees WHERE id = $1', [employeeId])).rows[0];
+  if (!e) return [];
+  const rows = (await q.query<{ scope_type: InstructionScope; body: string }>(
+    `SELECT scope_type, body FROM instructions WHERE status = 'active' AND (
+       scope_type = 'company' OR (scope_type = 'department' AND scope_id = $1) OR (scope_type = 'role' AND scope_id = $2) OR (scope_type = 'employee' AND scope_id = $3))`,
+    [e.department_id, `${e.department_id}:${e.role_key}`, employeeId])).rows;
+  const order: InstructionScope[] = ['company', 'department', 'role', 'employee'];
+  const label = { company: 'the whole company', department: 'your team', role: 'everyone in your role', employee: 'you personally' };
+  return rows.sort((a, b) => order.indexOf(a.scope_type) - order.indexOf(b.scope_type)).map((r) => ({ from: label[r.scope_type], text: r.body }));
+}

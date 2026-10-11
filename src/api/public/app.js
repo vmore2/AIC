@@ -164,6 +164,8 @@ function human(ev) {
     case 'emergency_stop.initiated': return { i: 'stop', t: 'bad', x: 'Emergency stop: all work halted' };
     case 'scope.resumed': return { i: 'play', t: 'ok', x: 'Work resumed' };
     case 'tool_call.denied': return { i: 'shield', t: 'bad', x: `Blocked an action by ${who || 'an employee'} (policy)` };
+    case 'instructions.set': return { i: 'note', t: 'accent', x: `Instructions updated for ${p.scope_type === 'company' ? 'the whole company' : p.scope_type === 'department' ? 'a team' : p.scope_type === 'role' ? 'a role' : 'an employee'}` };
+    case 'instructions.cleared': return { i: 'note', t: '', x: 'Instructions removed' };
     case 'company.stack_set': return { i: 'layers', t: '', x: 'Tech stack updated' };
     case 'model_provider.added': return { i: 'key', t: '', x: `Connected ${p.label}` };
     case 'model_profile.added': return { i: 'chip', t: '', x: `Added model ${ev.aggregate_id}` };
@@ -212,13 +214,32 @@ function renderShell() {
       <div id="stopbar"></div>
       <div class="top" id="top"><button class="icon-btn menu-btn" data-act="menu">${icon('menu')}</button>
         <div class="crumbs" id="crumbs"></div><span class="spacer"></span>
-        <span class="live" title="Updates every few seconds"><i></i>live</span>
+        <span class="live" title="Updates every few seconds"><i></i>live</span><span id="bell"></span>
         <button class="kbar" data-act="palette">${icon('search', 'sm')}<span>Search or jump to…</span><kbd>Ctrl K</kbd></button></div>
       <main class="page" id="page"></main>
     </div></div>`;
   renderNav();
+  renderShellBell();
   wireHold();
   addEventListener('scroll', () => $('#top')?.classList.toggle('scrolled', scrollY > 4), { passive: true });
+}
+function alertsOn() { try { return localStorage.getItem('aic-alerts') === 'on' && 'Notification' in window && Notification.permission === 'granted'; } catch { return false; } }
+function renderShellBell() { const b = $('#bell'); if (b) b.innerHTML = alertsOn() ? '' : `<button class="btn sm ghost" data-act="alerts" title="Get a desktop alert when your team needs a decision">${icon('inbox', 'sm')}Alerts</button>`; }
+function notify(items) {
+  if (!alertsOn() || document.visibilityState === 'visible') return;
+  const it = items[0];
+  const n = new Notification(items.length > 1 ? `${items.length} decisions need you` : (KIND[it.kind]?.label || 'Decision needed'), { body: it.title, tag: 'aic-decisions' });
+  n.onclick = () => { window.focus(); location.hash = '#/inbox'; n.close(); };
+}
+function newObjective() {
+  if (!S.team.length) { toast('Hire a team first.', 'bad'); location.hash = '#/company/hire'; return; }
+  modal('New objective', `<p class="muted" style="margin-bottom:6px">Say what must be true when it's done. The team lead turns this into a plan for your approval; every task is checked against these words, verbatim.</p>
+    <label class="f">Title</label><input id="no-title" placeholder="Online ordering for the bakery" autofocus>
+    <div class="field-row"><div><label class="f">Team</label><select id="no-team">${S.team.map((d) => `<option value="${esc(d.key)}">${esc(d.name)}</option>`).join('')}</select></div>
+      <div style="max-width:180px"><label class="f">Budget <small>(USD, model spend)</small></label><input id="no-budget" type="number" min="0.05" step="0.05" value="1.00"></div></div>
+    <label class="f">Requirements <small>— one per line</small></label><textarea id="no-reqs" rows="6" placeholder="Customers can browse the menu with prices&#10;Orders are stored in our PostgreSQL database&#10;The kitchen sees new orders within a minute"></textarea>
+    <p class="small muted" style="margin-top:8px">Tip: concrete, checkable sentences work best ("returns 404 for unknown items" beats "handles errors well").</p>`,
+  `<button class="btn" data-act="close">Cancel</button><button class="btn primary" data-act="obj-save">${icon('spark', 'sm')}Create &amp; ask for a plan</button>`);
 }
 function renderNav() {
   const nav = $('#nav'); if (!nav) return;
@@ -250,6 +271,8 @@ async function tick() {
   try {
     const [setup, inbox, team] = await Promise.all([api('/api/setup'), api('/api/inbox'), api('/api/team')]);
     const changed = inbox.length !== S.inbox.length || JSON.stringify(team) !== JSON.stringify(S.team) || setup.stopped !== S.setup?.stopped;
+    const fresh = inbox.filter((i) => !S.inbox.some((o) => o.id === i.id && o.kind === i.kind));
+    if (fresh.length && S.inbox.length + fresh.length >= inbox.length) notify(fresh);
     S.setup = setup; S.inbox = inbox; S.team = team;
     renderNav();
     const busy = overlay || (document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName));
@@ -373,7 +396,8 @@ async function renderDecision() {
       body = `<p class="muted">${esc(it.detail)}</p>${evidenceTable(d)}<p style="margin-top:10px"><a href="#" data-act="open-task" data-id="${it.id}">Open the full task ${icon('arrow', 'sm')}</a></p>`;
       if (it.kind === 'acceptance') { primary = { label: 'Accept work', act: 'd-accept' }; secondary = { label: 'Request changes', act: 'd-reject' }; }
       else if (it.kind === 'uncertain') { primary = { label: 'Accept anyway', act: 'd-accept-uncertain' }; secondary = { label: 'Request changes', act: 'd-reject' }; note.ph = 'Why you decide this way (required)'; }
-      else { primary = { label: 'Open task', act: 'open-task' }; note.show = false; }
+      else { primary = { label: 'Try again', act: 'd-retry' }; secondary = { label: 'Cancel task', act: 'd-cancel' }; note.ph = 'What should change on the next attempt? (shown to the employee; required to cancel)';
+        body += `<div class="row" style="margin-top:12px"><label class="small muted" for="retry-budget">Extra budget for the retry</label><input id="retry-budget" type="number" min="0" step="0.05" value="0.10" style="width:110px"><span class="small muted">USD</span></div>`; }
     } else if (it.kind === 'escalation') {
       body = it.detail ? `<div class="callout">${icon('spark')}<div>${esc(it.detail)}</div></div>` : '';
       note.ph = 'Your answer'; primary = { label: 'Send answer', act: 'd-answer' };
@@ -427,8 +451,9 @@ async function decided(msg) {
   S.inbox = await api('/api/inbox'); renderNav();
   if (S.page === 'inbox') route(true);
 }
-const noteVal = () => ($('#note')?.value || '').trim();
-function needNote(what) { const v = noteVal(); if (!v) { $('#note')?.focus(); toast(`Write ${what} in the note first.`, 'bad'); } return v; }
+const noteEl = () => $('.drawer #note') || $('.modal #note') || $('#note');
+const noteVal = () => (noteEl()?.value || '').trim();
+function needNote(what) { const v = noteVal(); if (!v) { noteEl()?.focus(); toast(`Write ${what} in the note first.`, 'bad'); } return v; }
 
 /* ================================================================== connections (shared form) */
 function connectionForm(kind, c = null, extra = '') {
@@ -457,9 +482,9 @@ PAGES.work = async (id) => {
   const status = await api('/api/status');
   if (!id) {
     crumbs('Work');
-    page().innerHTML = head('Work', 'Every objective, its real progress, and where it is stuck.', `<a class="btn primary" href="#/talk">${icon('plus', 'sm')}New objective</a>`) +
+    page().innerHTML = head('Work', 'Every objective, its real progress, and where it is stuck.', `<a class="btn" href="#/talk">${icon('talk', 'sm')}Brief a lead</a><button class="btn primary" data-act="new-objective">${icon('plus', 'sm')}New objective</button>`) +
       (status.objectives.length ? `<div class="stack">${status.objectives.slice().reverse().map(objectiveCard).join('')}</div>` :
-        `<div class="card empty">${artEmpty()}<h3>No work yet</h3><p>Objectives start as a conversation with a team lead.</p><p style="margin-top:14px"><a class="btn primary" href="#/talk">Brief a team lead</a></p></div>`);
+        `<div class="card empty">${artEmpty()}<h3>No work yet</h3><p>Write what you want done, or talk it through with a team lead first.</p><p style="margin-top:14px" class="row"><span class="spacer"></span><button class="btn primary" data-act="new-objective">New objective</button><a class="btn" href="#/talk">Brief a team lead</a><span class="spacer"></span></p></div>`);
     return;
   }
   const o = status.objectives.find((x) => x.id === id);
@@ -507,6 +532,9 @@ async function openTask(id) {
     <h3 style="margin-bottom:6px">Claim vs. evidence</h3>${evidenceTable(d)}
     ${t.status === 'awaiting_acceptance' || t.status === 'uncertain' ? `<label class="f">Note</label><textarea id="note" rows="2" placeholder="${t.status === 'uncertain' ? 'Why you accept work that could not be verified (required)' : 'Optional — required to request changes'}"></textarea>
       <div class="row" style="margin-top:10px"><button class="btn primary" data-act="${t.status === 'uncertain' ? 'd-accept-uncertain' : 'd-accept'}" data-id="${t.id}">${icon('check', 'sm')}${t.status === 'uncertain' ? 'Accept anyway' : 'Accept work'}</button><button class="btn" data-act="d-reject" data-id="${t.id}">Request changes</button></div>` : ''}
+    ${t.status === 'failed' ? `<label class="f">What should change next time?</label><textarea id="note" rows="2" placeholder="Shown to the employee as feedback"></textarea>
+      <div class="row" style="margin-top:10px"><input id="retry-budget" type="number" min="0" step="0.05" value="0.10" style="width:110px" title="Extra budget (USD)"><button class="btn primary" data-act="d-retry" data-id="${t.id}">Try again</button><button class="btn" data-act="d-cancel" data-id="${t.id}">Cancel task</button></div>` : ''}
+    ${['planned', 'ready', 'awaiting_input', 'changes_requested'].includes(t.status) ? `<p style="margin-top:12px"><button class="btn sm ghost" data-act="cancel-ask" data-id="${t.id}">Cancel this task…</button></p>` : ''}
     ${['planned', 'ready', 'in_progress', 'awaiting_input', 'changes_requested', 'failed'].includes(t.status) ? `<h3 style="margin-top:20px">Reassign</h3><div id="reassign" class="row" style="margin-top:8px"><span class="muted small">Loading teammates…</span></div>` : ''}
     <h3 style="margin-top:20px">Sessions</h3><div style="margin-top:6px">${runs.map((r) => `<div class="row small" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="chip">${esc(r.mode)}</span>${esc(r.employee)}<span class="spacer"></span><span class="${r.status === 'failed' ? 'bad' : 'muted'}">${esc(r.status)}${r.failure_reason ? ` — ${esc(r.failure_reason)}` : ''}</span><span class="muted">${money(r.cost_usd)}</span></div>`).join('') || '<span class="muted small">None yet.</span>'}</div>
     <details style="margin-top:20px"><summary class="muted" style="cursor:pointer">Ledger timeline (${d.timeline.length} events)</summary><pre class="code" style="margin-top:8px">${d.timeline.map((e) => `${e.seq}  ${new Date(e.at).toLocaleString()}  ${e.type}  ${JSON.stringify(e.payload).slice(0, 140)}`).map(esc).join('\n')}</pre></details>`);
@@ -536,7 +564,7 @@ function room(d) {
   const leads = emps.filter((e) => roleOf(e.category) === 'manager'); const checks = emps.filter((e) => ['reviewer', 'qa'].includes(e.category));
   const builders = emps.filter((e) => !leads.includes(e) && !checks.includes(e));
   const busy = emps.filter((e) => e.state === 'working').length;
-  return `<div class="card room"><div class="room-head"><h2>${esc(d.name)}</h2><span class="chip">${modeName(d.default_mode)}</span>${busy ? `<span class="chip ok dot">${busy} working</span>` : ''}<span class="spacer"></span><span class="muted small">${plural(emps.length, 'employee')}</span></div>
+  return `<div class="card room"><div class="room-head"><h2>${esc(d.name)}</h2><span class="chip" title="Oversight level">${modeName(d.mode || d.default_mode)}</span>${busy ? `<span class="chip ok dot">${busy} working</span>` : ''}<span class="spacer"></span><span class="muted small">${plural(emps.length, 'employee')}</span>${isManager() ? `<button class="btn sm" data-act="team-settings" data-key="${esc(d.key)}">${icon('setup', 'sm')}Oversight &amp; instructions</button>` : ''}</div>
     ${leads.length ? `<div class="tier lead">${leads.map(seat).join('')}</div>` : ''}<div class="tier">${builders.map(seat).join('')}</div>${checks.length ? `<div class="tier checks">${checks.map(seat).join('')}</div>` : ''}</div>`;
 }
 const modeName = (m) => ({ M1: 'Autonomous', M2: 'Exceptions only', M3: 'Milestones', M4: 'Plan gates', M5: 'Supervised', M6: 'Stopped' }[m] || m);
@@ -552,8 +580,40 @@ async function openEmployee(id) {
       <div class="row"><select id="emp-model" style="flex:1">${models.models.map((m) => `<option value="${esc(m.key)}" ${m.key === e.model_profile ? 'selected' : ''}>${esc(m.key)} — ${esc(m.family)}${m.provider === 'scripted' ? ' (offline demo)' : ` · ${money(m.price_per_million.input)}/${money(m.price_per_million.output)} per 1M`}</option>`).join('')}</select>
       <button class="btn primary" data-act="emp-model" data-dept="${esc(d.key)}" data-role="${esc(e.role_key)}">Apply</button></div>
       ${e.category === 'reviewer' ? '<div class="callout" style="margin-top:10px">' + icon('shield') + '<div>Put reviewers on a <b>different model family</b> than builders — same-family models share blind spots, and higher-risk work only counts reviews from a different family.</div></div>' : ''}`
-      : `<div class="muted">${esc(e.model_profile)}</div>`}`);
+      : `<div class="muted">${esc(e.model_profile)}</div>`}
+    <h3 style="margin-top:22px">Instructions</h3>
+    <p class="small muted" style="margin:4px 0 10px">Standing guidance on <i>how</i> to work — tone, conventions, focus. They never grant permissions, and an objective's requirements win if they conflict.</p>
+    <div id="emp-ins"><div class="skel"></div></div>`);
+  const all = await api('/api/instructions').catch(() => []);
+  const team = all.find((i) => i.scope_type === 'department' && i.team_key === d.key);
+  const company = all.find((i) => i.scope_type === 'company');
+  const role = all.find((i) => i.scope_type === 'role' && i.team_key === d.key && i.role_key === e.role_key);
+  const mine = all.find((i) => i.scope_type === 'employee' && i.scope_id === e.id);
+  const inherited = [[company, 'Whole company', '#/setup/instructions'], [team, d.name, null]].filter(([x]) => x);
+  $('#emp-ins').innerHTML = `${inherited.length ? `<div class="small muted" style="margin-bottom:8px">Also applies: ${inherited.map(([x, l]) => `<span class="chip" title="${esc(x.body)}">${esc(l)}</span>`).join(' ')}</div>` : ''}
+    ${isManager() ? `<label class="f">For ${esc(e.display_name)} only</label><textarea id="ins-emp" rows="3" placeholder="e.g. You own edge cases: always test empty input and unicode.">${esc(mine?.body || '')}</textarea>
+      <div class="row" style="margin-top:6px"><button class="btn sm primary" data-act="ins-save" data-scope="employee" data-employee="${e.id}" data-src="ins-emp">Save</button>${mine ? `<span class="small muted">v${mine.version}</span>` : ''}</div>
+      <label class="f">For every ${esc(e.role_title)} in ${esc(d.name)}</label><textarea id="ins-role" rows="3" placeholder="e.g. Add a JSDoc comment to every exported function.">${esc(role?.body || '')}</textarea>
+      <div class="row" style="margin-top:6px"><button class="btn sm primary" data-act="ins-save" data-scope="role" data-team="${esc(d.key)}" data-role="${esc(e.role_key)}" data-src="ins-role">Save</button>${role ? `<span class="small muted">v${role.version}</span>` : ''}</div>`
+      : [mine, role].filter(Boolean).map((x) => `<pre class="code">${esc(x.body)}</pre>`).join('') || '<div class="muted small">No instructions.</div>'}`;
 }
+async function teamSettings(key) {
+  const d = S.team.find((x) => x.key === key);
+  const all = await api('/api/instructions').catch(() => []);
+  const team = all.find((i) => i.scope_type === 'department' && i.team_key === key);
+  modal(`${esc(d.name)} — settings`, `<label class="f" style="margin-top:0">Oversight</label>
+    <div class="pick" id="ts-mode">${MODE_INFO.map(([m, l]) => `<button type="button" class="${(d.mode || d.default_mode) === m ? 'on' : ''}" data-act="ts-mode" data-v="${m}">${l}</button>`).join('')}</div>
+    <p class="small muted" id="ts-mode-help" style="margin-top:8px">${MODE_INFO.find(([m]) => m === (d.mode || d.default_mode))?.[2] || ''}</p>
+    <label class="f">Team instructions <small>— every employee in ${esc(d.name)} follows these</small></label>
+    <textarea id="ins-team" rows="5" placeholder="e.g. Prefer the standard library over new dependencies. Keep pull requests small.">${esc(team?.body || '')}</textarea>`,
+  `<button class="btn" data-act="close">Cancel</button><button class="btn primary" data-act="ts-save" data-team="${esc(key)}">Save</button>`);
+}
+const MODE_INFO = [
+  ['M1', 'Autonomous', 'The team plans and executes on its own; you see results and exceptions.'],
+  ['M3', 'Milestones', 'You review at milestones; routine steps run on their own.'],
+  ['M4', 'Plan gates', 'You approve every plan before work starts (recommended).'],
+  ['M5', 'Supervised', 'You approve plans and every consequential step.'],
+];
 async function hireTab(tabs) {
   const teams = await api('/api/catalog');
   page().innerHTML = head('Company', 'Ready-made teams with built-in checks. Hiring uses your default model — change any role later.', tabs) +
@@ -681,11 +741,11 @@ const scrollMsgs = () => { const m = $('#msgs'); if (m) m.scrollTop = m.scrollHe
 PAGES.setup = async (section) => {
   crumbs('Setup');
   if (!isManager()) { page().innerHTML = head('Setup') + '<div class="card">Only the CEO or an admin can change setup.</div>'; return; }
-  const [setup, models, presets, roles, stack, conns, authCfg] = await Promise.all([api('/api/setup'), api('/api/models'), api('/api/providers/presets'), api('/api/roles'), api('/api/stack'), api('/api/connections'), fetch('/api/auth/config').then((r) => r.json()).catch(() => ({}))]);
+  const [setup, models, presets, roles, stack, conns, authCfg, instr] = await Promise.all([api('/api/setup'), api('/api/models'), api('/api/providers/presets'), api('/api/roles'), api('/api/stack'), api('/api/connections'), fetch('/api/auth/config').then((r) => r.json()).catch(() => ({})), api('/api/instructions').catch(() => [])]);
   S.setup = setup; S.models = models; S.presets = presets; S.stack = stack; renderNav();
   const done = Object.fromEntries(setup.steps.map((s) => [s.key, s.done]));
   const real = models.models.filter((m) => m.provider !== 'scripted');
-  const toc = [['models', 'AI models', done.models], ['roles', 'Who uses which model', roles.length > 0 && real.length > 0], ['stack', 'Tech stack', done.stack], ['databases', 'Databases', conns.some((c) => c.status === 'active')], ['access', 'Sign-in & access', !!authCfg.google], ['infra', 'Infrastructure', true]];
+  const toc = [['models', 'AI models', done.models], ['roles', 'Who uses which model', roles.length > 0 && real.length > 0], ['stack', 'Tech stack', done.stack], ['databases', 'Databases', conns.some((c) => c.status === 'active')], ['instructions', 'Instructions', instr.some((i) => i.scope_type === 'company')], ['access', 'Sign-in & access', !!authCfg.google], ['infra', 'Infrastructure', true]];
   page().innerHTML = head('Setup', 'Your company runs on your own accounts. Keys and passwords are encrypted on this machine; employees never see them.') +
     `<div class="setup-grid"><nav class="toc">${toc.map(([k, l, d]) => `<a href="#/setup/${k}" class="${d ? 'done' : ''}"><span class="tick"></span>${l}</a>`).join('')}</nav><div class="stack">
     <section class="card" id="sec-models"><div class="card-head">${icon('chip', 'lg')}<div><h2>AI models</h2><div class="muted small">Your employees think with models you choose and pay for directly.${models.spend_cap_usd ? ` Lifetime spend cap: <b>${money(models.spend_cap_usd)}</b> per key.` : ''}</div></div><span class="spacer"></span><button class="btn primary" data-act="add-provider">${icon('plus', 'sm')}Add a provider</button></div>
@@ -710,6 +770,10 @@ PAGES.setup = async (section) => {
       ${conns.length ? conns.map((c) => `<div class="conn"><span class="dbicon ${c.kind}">${icon('db')}</span><div style="flex:1;min-width:0"><div class="row tight"><b>${esc(c.name)}</b><span class="chip ${c.status === 'active' ? 'ok' : c.status === 'requested' ? 'warn' : ''} dot">${c.status === 'requested' ? 'requested' : c.status}</span>${c.status === 'active' ? `<span class="chip">${c.access === 'read' ? 'read-only' : 'read & write'}</span>` : ''}${c.team ? `<span class="chip">${esc(c.team)}</span>` : ''}</div>
         <div class="small muted">${c.status === 'active' ? `${esc(c.key_fingerprint || '')}${c.last_check?.version ? ` · ${esc(c.last_check.version)}` : ''}` : esc(c.purpose)}${c.requested_by ? ` · asked by ${esc(c.requested_by)}` : ''}</div></div>
         ${c.status === 'requested' ? `<button class="btn primary sm" data-act="conn-open" data-id="${c.id}">Connect</button>` : c.status === 'active' ? `<button class="btn sm" data-act="conn-open" data-id="${c.id}">Update</button><button class="icon-btn" data-act="conn-revoke" data-id="${c.id}" title="Revoke">${icon('trash', 'sm')}</button>` : ''}</div>`).join('') : '<div class="muted small">No databases yet.</div>'}</section>
+
+    <section class="card" id="sec-instructions"><div class="card-head">${icon('note', 'lg')}<div><h2>Company-wide instructions</h2><div class="muted small">Every employee follows these. Add more for a team (Company → a team → Oversight &amp; instructions) or a single person (click them on the floor).</div></div></div>
+      <textarea id="ins-company" rows="5" placeholder="e.g. Our customers are small bakeries. Write in plain English. Never store card numbers.">${esc(instr.find((i) => i.scope_type === 'company')?.body || '')}</textarea>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-act="ins-save" data-scope="company" data-src="ins-company">Save instructions</button><span class="small muted">${instr.length ? `${plural(instr.length, 'set')} of instructions active across the company` : 'No instructions yet'}</span></div></section>
 
     <section class="card" id="sec-access"><div class="card-head">${icon('shield', 'lg')}<div><h2>Sign-in &amp; access</h2></div></div>
       ${authCfg.google ? `<div class="callout ok">${icon('check')}<div>Google sign-in is on. Only people you add can get in; governance needs a recent sign-in.</div></div>` : `<div class="callout">${icon('key')}<div>Google sign-in is off. Add <code>auth.google</code> to <code>aic.config.yaml</code> with your own OAuth client — see <code>docs/connect-your-infrastructure.md</code>.</div></div>`}
@@ -794,6 +858,9 @@ function palette() {
       { g: 'Do', l: 'Choose the tech stack', i: 'layers', run: () => { location.hash = '#/setup/stack'; } },
       { g: 'Do', l: 'Invite a person', i: 'people', run: () => { location.hash = '#/people'; } },
       { g: 'Do', l: 'Hire a team', i: 'company', run: () => { location.hash = '#/company/hire'; } },
+      { g: 'Do', l: 'New objective', i: 'plus', run: () => newObjective() },
+      { g: 'Do', l: 'Write company-wide instructions', i: 'note', run: () => { location.hash = '#/setup/instructions'; } },
+      ...S.team.map((d) => ({ g: 'Do', l: `Oversight & instructions for ${d.name}`, i: 'setup', run: () => teamSettings(d.key) })),
       { g: 'Do', l: 'Design a team', i: 'plus', run: () => { location.hash = '#/company/build'; } },
     ] : []),
     { g: 'Do', l: 'Toggle light / dark', i: 'moon', run: toggleTheme },
@@ -953,6 +1020,36 @@ const ACT = {
     $$('[data-stack]').forEach((g) => { stack[g.dataset.stack] = g.querySelector('.on')?.dataset.v || ''; });
     await post('/api/stack', { stack }); toast('Stack saved — every new task carries it.'); await tick(); route(true);
   }),
+  // instructions & oversight
+  'ins-save': (el) => busy(el, async () => {
+    const r = await post('/api/instructions', { scope_type: el.dataset.scope, team: el.dataset.team, role: el.dataset.role, employee: el.dataset.employee, body: $('#' + el.dataset.src).value });
+    toast(r.version ? `Saved (v${r.version}) — applies from the next session.` : 'Instructions removed.');
+  }),
+  'team-settings': (el) => teamSettings(el.dataset.key).catch(fail),
+  'ts-mode': (el) => { $$('#ts-mode button').forEach((b) => b.classList.toggle('on', b === el)); $('#ts-mode-help').textContent = MODE_INFO.find(([m]) => m === el.dataset.v)?.[2] || ''; },
+  'ts-save': (el) => busy(el, async () => {
+    const d = S.team.find((x) => x.key === el.dataset.team); const mode = $('#ts-mode .on')?.dataset.v;
+    if (mode && mode !== (d.mode || d.default_mode)) await post(`/api/teams/${el.dataset.team}/mode`, { mode, reason: 'changed in team settings' });
+    await post('/api/instructions', { scope_type: 'department', team: el.dataset.team, body: $('#ins-team').value });
+    closeOverlay(); toast('Team settings saved.'); S.team = await api('/api/team'); route(true);
+  }),
+  // objectives & failed work
+  'new-objective': () => newObjective(),
+  'obj-save': (el) => busy(el, async () => {
+    const requirements = $('#no-reqs').value.split('\n').map((x) => x.replace(/^\s*[-*\d.)]+\s*/, '').trim()).filter(Boolean);
+    const r = await post('/api/objectives', { title: $('#no-title').value, team: $('#no-team').value, requirements, budget_usd: Number($('#no-budget').value) });
+    closeOverlay(); toast('Objective created — the lead is drafting a plan for your approval.'); location.hash = '#/work/' + r.objectiveId;
+  }),
+  'd-retry': (el) => busy(el, async () => { await post(`/api/tasks/${el.dataset.id}/retry`, { add_budget_usd: Number(($('.drawer #retry-budget') || $('#retry-budget'))?.value || 0), reason: noteVal() || 'retry requested by the CEO' }); closeOverlay(); decided('Sent back to the team for another attempt.'); }),
+  'd-cancel': (el) => { const n = needNote('why you are cancelling'); if (n) busy(el, async () => { await post(`/api/tasks/${el.dataset.id}/cancel`, { reason: n }); closeOverlay(); decided('Task cancelled.'); }); },
+  'cancel-ask': (el) => { el.outerHTML = `<div class="row"><input id="cancel-why" placeholder="Why cancel?" style="flex:1"><button class="btn sm danger" data-act="cancel-do" data-id="${el.dataset.id}">Cancel task</button></div>`; $('#cancel-why').focus(); },
+  'cancel-do': (el) => { const reason = $('#cancel-why').value.trim(); if (!reason) { toast('Say why.', 'bad'); return; } busy(el, async () => { await post(`/api/tasks/${el.dataset.id}/cancel`, { reason }); closeOverlay(); toast('Task cancelled.'); route(true); }); },
+  alerts: async () => {
+    if (!('Notification' in window)) { toast('This browser has no notifications.', 'bad'); return; }
+    const p = await Notification.requestPermission();
+    try { localStorage.setItem('aic-alerts', p === 'granted' ? 'on' : 'off'); } catch {}
+    toast(p === 'granted' ? 'Desktop alerts on — you’ll hear about new decisions.' : 'Alerts are blocked in this browser.', p === 'granted' ? 'ok' : 'bad'); renderShellBell();
+  },
   // people
   'p-role': (el) => { $$('#p-role button').forEach((b) => b.classList.toggle('on', b === el)); $('#p-help').textContent = ROLE_HELP[el.dataset.v]; },
   invite: (el) => busy(el, async () => {

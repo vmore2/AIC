@@ -23,6 +23,7 @@ export const COMMANDS = {
   assignRoleModel: setup.assignRoleModel,
   setStack: setup.setStack,
   setDefaultModel: setup.setDefaultModel,
+  setInstructions: setup.setInstructions,
   requestConnection: setup.requestConnection,
   provideConnection: setup.provideConnection,
   declineConnection: setup.declineConnection,

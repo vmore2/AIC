@@ -6,7 +6,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { App } from '../app.js';
 import type { Principal } from '../domain/types.js';
 import { DomainError } from '../ledger/engine.js';
-import { CONNECTION_KINDS, stackFrom, STACK_KEYS, type ConnectionKind, type Stack } from '../ledger/commands/setup.js';
+import { CONNECTION_KINDS, stackFrom, STACK_KEYS, type ConnectionKind, type InstructionScope, type Stack } from '../ledger/commands/setup.js';
+import { MODES, type Mode } from '../domain/types.js';
 import { checkConnection, DEFAULT_PORTS, type DbConfig } from '../connections/databases.js';
 import { listProviderModels, ProviderError } from '../runtime/modelPort.js';
 import { PRICES_CHECKED, PROVIDER_PRESETS } from '../runtime/presets.js';
@@ -160,6 +161,52 @@ export function registerSetupRoutes(server: FastifyInstance, app: App, h: Helper
   server.get('/api/stack', async (req) => { await h.who(req); return { stack: stackFrom(await settings()), choices: STACK_CHOICES, keys: STACK_KEYS }; });
   server.post<{ Body: { stack: Stack } }>('/api/stack', async (req) =>
     app.ledger.run('setStack', { stack: req.body?.stack ?? {} }, await h.requireManager(req), h.key(req)));
+
+  // ------------------------------------------------------------- CEO instructions (company / team / role / employee)
+  server.get('/api/instructions', async (req) => {
+    await h.who(req);
+    return (await db.query(`SELECT i.scope_type, i.scope_id, i.body, i.version, i.created_at,
+        CASE i.scope_type WHEN 'company' THEN 'Whole company'
+          WHEN 'department' THEN (SELECT name FROM departments WHERE id = i.scope_id)
+          WHEN 'role' THEN (SELECT d.name || ' · ' || coalesce((SELECT role_snapshot->>'title' FROM employees WHERE department_id = d.id AND role_key = split_part(i.scope_id, ':', 2) LIMIT 1), split_part(i.scope_id, ':', 2))
+                             FROM departments d WHERE d.id = split_part(i.scope_id, ':', 1))
+          WHEN 'employee' THEN (SELECT display_name FROM employees WHERE id = i.scope_id) END AS label,
+        CASE i.scope_type WHEN 'department' THEN (SELECT key FROM departments WHERE id = i.scope_id)
+          WHEN 'role' THEN (SELECT key FROM departments WHERE id = split_part(i.scope_id, ':', 1)) END AS team_key,
+        CASE i.scope_type WHEN 'role' THEN split_part(i.scope_id, ':', 2) END AS role_key
+      FROM instructions i WHERE i.status = 'active' ORDER BY array_position(ARRAY['company','department','role','employee'], i.scope_type), i.created_at`)).rows;
+  });
+  server.post<{ Body: { scope_type: InstructionScope; team?: string; role?: string; employee?: string; body: string } }>('/api/instructions', async (req) => {
+    if (!['company', 'department', 'role', 'employee'].includes(req.body?.scope_type)) throw new DomainError('validation', 'Choose who the instructions are for');
+    return app.ledger.run('setInstructions', { scopeType: req.body.scope_type, departmentKey: req.body.team, roleKey: req.body.role, employeeId: req.body.employee, body: String(req.body.body ?? '') },
+      await h.requireManager(req), h.key(req));
+  });
+
+  // ------------------------------------------------------------- running the company alone
+  /** Start an objective directly (the other way is briefing a lead in Talk). */
+  server.post<{ Body: { title: string; team: string; requirements: string[]; budget_usd: number } }>('/api/objectives', async (req) => {
+    const p = await h.who(req);
+    const reqs = (req.body?.requirements ?? []).map((t) => String(t).trim()).filter(Boolean);
+    if (!req.body?.title?.trim()) throw new DomainError('validation', 'Give the objective a title');
+    if (!reqs.length) throw new DomainError('validation', 'Write at least one requirement — what must be true when it is done');
+    const budget = Number(req.body.budget_usd);
+    if (!(budget > 0)) throw new DomainError('validation', 'Set a budget greater than $0');
+    return app.ledger.run('createObjective', { title: req.body.title.trim(), departmentKey: req.body.team, budgetUsd: budget,
+      requirements: reqs.map((text, i) => ({ key: `REQ-${i + 1}`, text })) }, p, h.key(req));
+  });
+  server.post<{ Params: { id: string }; Body: { add_budget_usd?: number; reason?: string } }>('/api/tasks/:id/retry', async (req) =>
+    app.ledger.run('retryTask', { taskId: req.params.id, addBudgetUsd: Math.max(0, Number(req.body?.add_budget_usd) || 0), reason: req.body?.reason?.trim() || 'retry requested by the CEO' }, await h.who(req), h.key(req)));
+  server.post<{ Params: { id: string }; Body: { reason?: string } }>('/api/tasks/:id/cancel', async (req) => {
+    const reason = req.body?.reason?.trim();
+    if (!reason) throw new DomainError('validation', 'Say why you are cancelling this task');
+    return app.ledger.run('cancelTask', { taskId: req.params.id, reason }, await h.who(req), h.key(req));
+  });
+  server.post<{ Params: { dept: string }; Body: { mode: Mode; reason?: string } }>('/api/teams/:dept/mode', async (req) => {
+    if (!MODES.includes(req.body?.mode)) throw new DomainError('validation', 'Unknown oversight level');
+    const d = (await db.query<{ id: string }>('SELECT id FROM departments WHERE key = $1', [req.params.dept])).rows[0];
+    if (!d) throw new DomainError('not_found', 'Team not hired');
+    return app.ledger.run('setMode', { scopeType: 'department', scopeId: d.id, mode: req.body.mode, reason: req.body.reason?.trim() || 'changed in the dashboard' }, await h.requireManager(req), h.key(req));
+  });
 
   // ------------------------------------------------------------- connections (databases)
   server.get('/api/connections', async (req) => {
