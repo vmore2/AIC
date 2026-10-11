@@ -45,6 +45,11 @@ export const TOOL_CATALOG: readonly ToolDef[] = [
   t('repo.open_pr', 'A4', 'trusted', 'connector', ['state_change'], 'Open a pull request from your run branch.'),
   t('repo.merge_pr', 'A5', 'trusted', 'connector', ['state_change'], 'Merge a pull request into a protected branch (approval required).'),
   t('deploy.request', 'A5', 'trusted', 'connector', ['state_change'], 'Request a deployment (R3: human pre-approval).'),
+  // Databases the CEO connected (credentials stay with the platform; agents pass a connection id)
+  t('connections.request', 'A2', 'trusted', 'builtin', [], 'Ask the CEO to connect a database (PostgreSQL or MySQL). The CEO enters credentials; you never see them.'),
+  t('db.schema', 'A0', 'internal', 'builtin', ['reads_private'], 'List tables and columns of a connected database.'),
+  t('db.query', 'A0', 'internal', 'builtin', ['reads_private'], 'Run one read-only SQL statement on a connected database (max 200 rows).'),
+  t('db.execute', 'A4', 'trusted', 'builtin', ['state_change'], 'Run one SQL statement that changes data or schema (only on connections the CEO granted read/write).'),
   // External content (untrusted by definition)
   t('web.search', 'A0', 'untrusted', 'connector', ['reads_untrusted'], 'Search the public web.'),
   t('web.fetch', 'A0', 'untrusted', 'connector', ['reads_untrusted'], 'Fetch a public web page.'),

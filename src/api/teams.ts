@@ -55,11 +55,12 @@ export function registerTeamRoutes(server: FastifyInstance, app: App, who: (req:
     const file = saveTeamSpec(app.config.teams_path, parsed.data.team, `# Created with the dashboard team builder.\n${toYaml(req.body.spec)}`);
     return { saved: file, team: summarize(draft, await hiredKeys()) };
   });
-  server.post<{ Params: { key: string } }>('/api/catalog/:key/hire', async (req) => {
+  server.post<{ Params: { key: string }; Body: { models?: Record<string, string> } }>('/api/catalog/:key/hire', async (req) => {
     const e = catalog().get(req.params.key);
     if (!e?.department) throw new DomainError('not_found', 'Unknown team');
     if (e.errors.length) throw new DomainError('validation', 'Team has errors', { errors: e.errors });
-    const models = Object.fromEntries(e.department.roles.map((r) => [r.key, profileForRole(app.config, r.key)]));
+    const companyDefault = (await db.query<{ d: string | null }>(`SELECT settings->>'default_model' AS d FROM company`)).rows[0]?.d ?? undefined;
+    const models = Object.fromEntries(e.department.roles.map((r) => [r.key, profileForRole(app.config, r.key, app.models, { explicit: req.body?.models?.[r.key], companyDefault })]));
     return app.ledger.run('hireDepartment', { template: e.department, models }, await who(req));
   });
 }

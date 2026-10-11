@@ -10,12 +10,23 @@ import * as work from './commands/work.js';
 import * as ver from './commands/verification.js';
 import * as gov from './commands/governance.js';
 import * as talk from './commands/interaction.js';
+import * as setup from './commands/setup.js';
 
 export const COMMANDS = {
   bootstrapCompany: org.bootstrapCompany,
   addUser: org.addUser,
   setUserEmail: org.setUserEmail,
   removeAccess: org.removeAccess,
+  addModelProvider: setup.addModelProvider,
+  removeModelProvider: setup.removeModelProvider,
+  addModelProfile: setup.addModelProfile,
+  assignRoleModel: setup.assignRoleModel,
+  setStack: setup.setStack,
+  setDefaultModel: setup.setDefaultModel,
+  requestConnection: setup.requestConnection,
+  provideConnection: setup.provideConnection,
+  declineConnection: setup.declineConnection,
+  revokeConnection: setup.revokeConnection,
   issueAccessToken: org.issueAccessToken,
   revokeAccessToken: org.revokeAccessToken,
   hireDepartment: org.hireDepartment,

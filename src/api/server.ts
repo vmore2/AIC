@@ -13,6 +13,7 @@ import { DomainError, verifyChain } from '../ledger/engine.js';
 import { sha256Hex } from '../domain/hash.js';
 import { inbox, objectiveRollups, orgChart, taskDetail } from '../reports/views.js';
 import { registerTeamRoutes } from './teams.js';
+import { registerSetupRoutes } from './setup.js';
 import { GoogleAuth, sessionSecret } from './auth.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -189,6 +190,7 @@ export function buildServer(app: App, token: string, opts: { google?: GoogleAuth
     app.ledger.run('resumeScope', { scope: { type: 'company', id: (await db.query<{ id: string }>('SELECT id FROM company')).rows[0]!.id },
       mode: req.body.mode ?? app.config.defaults.mode, acknowledgeUnresolvedActions: !!req.body.ack, reason: req.body.reason ?? 'resume' }, await who(req), key(req)));
   registerTeamRoutes(server, app, who);
+  registerSetupRoutes(server, app, { who, key, requireManager });
   server.post<{ Params: { id: string }; Body: { employeeId: string; reason: string } }>('/api/tasks/:id/reassign', async (req) =>
     app.ledger.run('reassignTask', { taskId: req.params.id, employeeId: req.body.employeeId, reason: req.body.reason }, await who(req), key(req)));
   server.get<{ Params: { id: string } }>('/api/tasks/:id/candidates', async (req) =>

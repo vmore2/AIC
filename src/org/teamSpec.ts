@@ -18,6 +18,7 @@ export const CAPABILITIES = {
   crm: { tools: ['crm.read', 'crm.update'], label: 'Reads and updates the CRM' },
   tickets: { tools: ['ticket.read', 'ticket.create'], label: 'Reads and creates tickets' },
   analytics: { tools: ['analytics.query', 'sandbox.exec'], label: 'Runs read-only analytics queries' },
+  databases: { tools: ['connections.request', 'db.schema', 'db.query', 'db.execute'], label: 'Uses databases the CEO connects (asks for credentials; writes only with read/write access)' },
   finance_records: { tools: ['finance.read_ledger'], label: 'Reads accounting records' },
   contracts: { tools: ['contracts.read'], label: 'Reads contracts' },
   hr_records: { tools: ['hris.read'], label: 'Reads HR records (restricted)' },

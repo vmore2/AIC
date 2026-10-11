@@ -13,6 +13,8 @@ export const ModelProfileSchema = z.object({
   model: z.string(),
   base_url: z.string().url().optional(),
   api_key_env: z.string().optional(),
+  /** Vault id of a key the CEO entered in the dashboard (alternative to api_key_env). */
+  api_key_secret: z.string().optional(),
   /** Lineage grouping used for reviewer independence (e.g. "openai", "anthropic", "llama"). */
   family: z.string(),
   context_tokens: z.number().int().positive().default(128000),
@@ -78,6 +80,8 @@ export const ConfigSchema = z.object({
     }).optional(),
     session_secret_env: z.string().default('AIC_SESSION_SECRET'),
   }).default({}),
+  /** Encrypts the secret vault (keys and passwords entered in the dashboard); generated into storage if unset. */
+  master_key_env: z.string().default('AIC_MASTER_KEY'),
   /** Signs run credentials; supply via env in production. */
   credential_secret_env: z.string().default('AIC_CREDENTIAL_SECRET'),
 });

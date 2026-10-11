@@ -11,7 +11,7 @@ import { transitionTask } from '../transition.js';
 
 // ---------------------------------------------------------------- helpers
 
-async function ownerContext(c: CommandContext, task: TaskRow, actionClass = 'A2') {
+export async function ownerContext(c: CommandContext, task: TaskRow, actionClass = 'A2') {
   const lease = await getLease(c.q, task.id);
   const epoch = lease?.epoch ?? 0;
   const mode = effectiveMode(...(await modesFor(c.q, task.objective_id)));

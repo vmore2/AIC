@@ -50,7 +50,7 @@ async function pendingDecisionCount(q: Queryable, objectiveId: string) {
   return Number(r.rows[0]!.n);
 }
 
-export interface InboxItem { kind: 'plan' | 'acceptance' | 'uncertain' | 'failed' | 'escalation' | 'directive' | 'release' | 'note'; id: string; title: string; detail: string; command: string }
+export interface InboxItem { kind: 'plan' | 'acceptance' | 'uncertain' | 'failed' | 'escalation' | 'directive' | 'release' | 'note' | 'connection'; id: string; title: string; detail: string; command: string }
 
 /** Everything waiting on the CEO, with the exact command that decides it. */
 export async function inbox(q: Queryable): Promise<InboxItem[]> {
@@ -65,7 +65,14 @@ export async function inbox(q: Queryable): Promise<InboxItem[]> {
   const unc = await q.query<{ id: string; title: string; status: string }>(`SELECT id, title, status FROM tasks WHERE status IN ('uncertain','failed')`);
   for (const t of unc.rows) items.push({ kind: t.status as 'uncertain' | 'failed', id: t.id, title: `${t.status.toUpperCase()}: "${t.title}"`,
     detail: t.status === 'uncertain' ? 'Correctness could not be established. Review the evidence.' : 'Attempts or budget exhausted. Decide: retry, change, or cancel.', command: `aic task ${t.id}` });
-  const esc = await q.query<{ id: string; type: string; body: { question: string; recommendation?: string } }>(`SELECT id, type, body FROM escalations WHERE status = 'open' AND routed_to_type = 'user' ORDER BY created_at`);
+  const conns = await q.query<{ id: string; kind: string; name: string; purpose: string; access: string; who: string | null; team: string | null }>(
+    `SELECT c.id, c.kind, c.name, c.purpose, c.access, e.display_name AS who, d.name AS team FROM connections c
+     LEFT JOIN employees e ON e.id = c.requested_by_employee_id LEFT JOIN departments d ON d.id = c.department_id WHERE c.status = 'requested' ORDER BY c.created_at`);
+  for (const c of conns.rows) items.push({ kind: 'connection', id: c.id, title: `${c.who ?? 'Your team'} needs a ${c.kind === 'postgres' ? 'PostgreSQL' : 'MySQL'} database: "${c.name}"`,
+    detail: `${c.purpose}${c.team ? ` (${c.team}, asks for ${c.access === 'read' ? 'read-only' : 'read/write'} access)` : ''}`, command: 'Open the dashboard → Inbox to connect it' });
+  // Connection requests are shown above as their own card; their blocking escalation would only duplicate it.
+  const esc = await q.query<{ id: string; type: string; body: { question: string; recommendation?: string } }>(
+    `SELECT id, type, body FROM escalations WHERE status = 'open' AND routed_to_type = 'user' AND NOT (body ? 'connection_id') ORDER BY created_at`);
   for (const e of esc.rows) items.push({ kind: 'escalation', id: e.id, title: `${e.type.replace('_', ' ')}: ${e.body.question}`, detail: e.body.recommendation ? `Recommendation: ${e.body.recommendation}` : '', command: `aic resolve ${e.id} "<answer>"` });
   const dirs = await q.query<{ id: string; directive_type: string; payload: { summary: string } }>(`SELECT id, directive_type, payload FROM directives WHERE status = 'pending_confirmation' ORDER BY created_at`);
   for (const d of dirs.rows) items.push({ kind: 'directive', id: d.id, title: `Proposal from conversation: ${d.payload.summary}`, detail: d.directive_type, command: `aic directive ${d.id}` });

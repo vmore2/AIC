@@ -4,8 +4,12 @@
   "private": true,
   "description": "Governed AI workforce platform: team architecture + authoritative work ledger. Customers bring their own database, model keys, and code hosting.",
   "type": "module",
-  "engines": { "node": ">=22" },
-  "bin": { "aic": "./bin/aic.mjs" },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "aic": "./bin/aic.mjs"
+  },
   "scripts": {
     "aic": "tsx src/cli/main.ts",
     "dev": "tsx src/api/server.ts",
@@ -16,9 +20,10 @@
   "dependencies": {
     "@cedar-policy/cedar-wasm": "4.12.0",
     "@electric-sql/pglite": "0.5.6",
-    "fastify": "5.6.1",
+    "fastify": "5.12.5",
+    "mysql2": "3.24.4",
     "pg": "8.16.3",
-    "yaml": "2.8.1",
+    "yaml": "2.9.1",
     "zod": "3.25.76"
   },
   "devDependencies": {
@@ -27,6 +32,6 @@
     "fast-check": "4.3.0",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
-    "vitest": "3.2.4"
+    "vitest": "3.2.7"
   }
 }

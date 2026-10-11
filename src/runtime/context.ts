@@ -4,6 +4,7 @@
 import type { Queryable } from '../ledger/db.js';
 import { getCriteria, getEmployee, getObjective, getTask } from '../ledger/store.js';
 import type { Department } from '../org/schema.js';
+import { stackFrom, type Stack } from '../ledger/commands/setup.js';
 
 export interface TaskContract {
   task: { id: string; kind: string; title: string; spec: string; risk_tier: string; attempt: number; max_attempts: number };
@@ -15,6 +16,10 @@ export interface TaskContract {
   team_knowledge: { note: string; kind: string; id: string }[];
   budget: { task_limit_usd: number; task_spent_usd: number };
   permissions: string[];
+  /** Technology the CEO chose for this company; follow it unless a requirement says otherwise. */
+  project_stack: Stack;
+  /** Databases the CEO connected for your team. You never see credentials: use the db.* tools with the id. */
+  databases: { connection_id: string; kind: string; name: string; access: string; status: string; purpose: string }[];
   how_to_finish: string;
   planning?: PlanningBrief;
 }
@@ -60,6 +65,8 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
       [emp.department_id])).rows.map((r) => ({ id: r.id, kind: r.kind, note: `${r.body} (advisory team note; the requirements and criteria above take precedence)` })),
     budget: { task_limit_usd: Number(task.budget_limit), task_spent_usd: Number(task.budget_spent) },
     permissions: (task.tool_grants as string[]).filter((t) => emp.tool_grants.includes(t)),
+    project_stack: stackFrom((await q.query<{ settings: Record<string, string> }>('SELECT settings FROM company')).rows[0]?.settings ?? {}),
+    databases: await teamDatabases(q, emp.department_id),
     how_to_finish: task.kind === 'planning'
       ? 'Call ledger.propose_plan with a complete plan. If it fails validation, fix the listed errors and call it again. The CEO decides; you cannot approve your own plan.'
       : 'Write your deliverable files in the workspace, run any checks, then call ledger.submit_work. Your claim does not complete the task — independent verification against the acceptance criteria decides.',
@@ -86,6 +93,12 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
     };
   }
   return contract;
+}
+
+export async function teamDatabases(q: Queryable, departmentId: string) {
+  return (await q.query<{ connection_id: string; kind: string; name: string; access: string; status: string; purpose: string }>(
+    `SELECT id AS connection_id, kind, name, access, status, purpose FROM connections
+     WHERE status IN ('active','requested') AND (department_id = $1 OR department_id IS NULL) ORDER BY created_at`, [departmentId])).rows;
 }
 
 /** Context for an independent reviewer: the artifact and the contract, never the producer's reasoning or claims. */

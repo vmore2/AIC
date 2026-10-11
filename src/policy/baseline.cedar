@@ -19,7 +19,7 @@ permit (principal is System, action, resource);
 
 // Employees act on their own task, within the current lease epoch.
 permit (principal is Employee, action in [Action::"task.submit", Action::"task.raise_blocker", Action::"task.ask_question",
-        Action::"task.post_update", Action::"tool.invoke", Action::"memory.remember"], resource)
+        Action::"task.post_update", Action::"tool.invoke", Action::"memory.remember", Action::"connection.request"], resource)
 when { context.is_owner && context.epoch_current };
 
 // Managers delegate within their scope (attenuation is enforced by the Transition Engine).
@@ -32,7 +32,7 @@ permit (principal is Employee, action in [Action::"review.record_verdict", Actio
 when { context.is_assigned_reviewer && context.epoch_current };
 
 // Conversation runs may only read and propose directives.
-permit (principal is Employee, action in [Action::"directive.propose", Action::"tool.invoke"], resource)
+permit (principal is Employee, action in [Action::"directive.propose", Action::"tool.invoke", Action::"connection.request"], resource)
 when { context.in_conversation };
 
 // ---------------- forbids (baseline) ----------------
@@ -41,7 +41,8 @@ when { context.in_conversation };
 forbid (principal is Employee, action in [Action::"task.accept", Action::"task.reject", Action::"task.accept_uncertain",
         Action::"approval.decide", Action::"mode.set", Action::"employee.hire", Action::"employee.reconfigure",
         Action::"budget.adjust", Action::"emergency.stop", Action::"scope.resume", Action::"directive.confirm",
-        Action::"objective.create", Action::"evidence.record_human", Action::"task.reopen", Action::"task.retry"], resource);
+        Action::"objective.create", Action::"evidence.record_human", Action::"task.reopen", Action::"task.retry",
+        Action::"company.configure", Action::"connection.provide"], resource);
 
 // F3: Stale lease epochs are fenced off (INV-7).
 forbid (principal is Employee, action, resource) when { context.stale_epoch };
@@ -67,5 +68,6 @@ when { context.in_producer_lineage };
 
 // F9: Governance requires step-up authentication.
 forbid (principal is User, action in [Action::"mode.set", Action::"emergency.stop", Action::"scope.resume",
-        Action::"employee.hire", Action::"employee.reconfigure", Action::"budget.adjust"], resource)
+        Action::"employee.hire", Action::"employee.reconfigure", Action::"budget.adjust", Action::"company.configure",
+        Action::"connection.provide"], resource)
 when { !principal.step_up };

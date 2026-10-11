@@ -8,6 +8,7 @@ import { Orchestrator } from './orchestrator/orchestrator.js';
 import { CredentialIssuer } from './runtime/credentials.js';
 import { ToolGateway } from './runtime/gateway.js';
 import { ModelFactory } from './runtime/models.js';
+import { SecretVault } from './secrets/vault.js';
 
 export interface App {
   config: Config;
@@ -17,6 +18,8 @@ export interface App {
   workspaces: Workspaces;
   models: ModelFactory;
   sandbox: SandboxPort;
+  /** The customer's encrypted secrets (model keys, database credentials). */
+  vault: SecretVault;
   close(): Promise<void>;
 }
 
@@ -32,11 +35,13 @@ export async function createApp(config: Config, opts: { log?: (m: string) => voi
   const workspaces = new Workspaces(host, path.join(config.storage_path, 'workspaces'));
   const sandbox: SandboxPort = config.sandbox.kind === 'docker' ? new DockerSandbox(config.sandbox.docker) : new LocalProcessSandbox(config.sandbox.allow_unisolated_local);
   const issuer = CredentialIssuer.fromEnvOrFile(config.credential_secret_env, config.storage_path);
-  const gateway = new ToolGateway(ledger, issuer, workspaces, sandbox);
-  const models = ModelFactory.fromConfig(config);
+  const vault = SecretVault.open(config.storage_path, process.env[config.master_key_env]);
+  const gateway = new ToolGateway(ledger, issuer, workspaces, sandbox, vault);
+  const models = ModelFactory.fromConfig(config, vault);
+  await models.refresh(ledger.db);
   const orchestrator = new Orchestrator({ ledger, gateway, workspaces, sandbox, models, issuer, storageDir: config.storage_path, log: opts.log });
   return {
-    config, ledger, orchestrator, gateway, workspaces, models, sandbox,
+    config, ledger, orchestrator, gateway, workspaces, models, sandbox, vault,
     close: async () => { await orchestrator.stop(); await ledger.close(); },
   };
 }

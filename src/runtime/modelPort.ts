@@ -25,8 +25,15 @@ export function costOf(profile: ModelProfile, usage: { inputTokens: number; outp
   return (usage.inputTokens * profile.price_per_million.input + usage.outputTokens * profile.price_per_million.output) / 1_000_000;
 }
 
-function apiKey(profile: ModelProfile): string {
-  if (!profile.api_key_env) throw new ProviderError(`Model profile ${profile.key} has no api_key_env`, false);
+/** Reads a secret from the customer's vault (keys the CEO entered in the dashboard). */
+export type SecretLookup = (id: string) => string;
+
+export function apiKey(profile: ModelProfile, secret?: SecretLookup): string {
+  if (profile.api_key_secret) {
+    if (!secret) throw new ProviderError(`Model profile ${profile.key} uses a vault key but no vault is available`, false);
+    return secret(profile.api_key_secret);
+  }
+  if (!profile.api_key_env) return ''; // keyless endpoint (e.g. Ollama on the CEO's machine)
   const k = process.env[profile.api_key_env];
   if (!k) throw new ProviderError(`Environment variable ${profile.api_key_env} is not set for model profile ${profile.key}`, false);
   return k;
@@ -50,7 +57,7 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
 
 /** Any OpenAI-compatible chat-completions endpoint (OpenAI, Azure OpenAI, vLLM, Ollama, LM Studio, …). */
 export class OpenAICompatibleModel implements ModelPort {
-  constructor(readonly profile: ModelProfile) {}
+  constructor(readonly profile: ModelProfile, private readonly secret?: SecretLookup) {}
   async generate(req: ModelRequest): Promise<ModelResponse> {
     const base = (this.profile.base_url ?? 'https://api.openai.com/v1').replace(/\/$/, '');
     const messages = [{ role: 'system', content: req.system }, ...req.messages.map((m) => {
@@ -64,7 +71,7 @@ export class OpenAICompatibleModel implements ModelPort {
       ...(req.tools.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
       ...(req.maxOutputTokens ? { max_tokens: req.maxOutputTokens } : {}),
     };
-    const r = await post(`${base}/chat/completions`, { authorization: `Bearer ${apiKey(this.profile)}` }, body) as {
+    const r = await post(`${base}/chat/completions`, { authorization: `Bearer ${apiKey(this.profile, this.secret)}` }, body) as {
       choices: { message: { content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] } }[];
       usage?: { prompt_tokens: number; completion_tokens: number };
     };
@@ -79,7 +86,7 @@ export class OpenAICompatibleModel implements ModelPort {
 
 /** Anthropic Messages API. */
 export class AnthropicModel implements ModelPort {
-  constructor(readonly profile: ModelProfile) {}
+  constructor(readonly profile: ModelProfile, private readonly secret?: SecretLookup) {}
   async generate(req: ModelRequest): Promise<ModelResponse> {
     const base = (this.profile.base_url ?? 'https://api.anthropic.com').replace(/\/$/, '');
     const messages: { role: 'user' | 'assistant'; content: unknown[] }[] = [];
@@ -95,7 +102,7 @@ export class AnthropicModel implements ModelPort {
         for (const t of m.toolCalls ?? []) push('assistant', { type: 'tool_use', id: t.id, name: t.name, input: t.arguments });
       }
     }
-    const r = await post(`${base}/v1/messages`, { 'x-api-key': apiKey(this.profile), 'anthropic-version': '2023-06-01' }, {
+    const r = await post(`${base}/v1/messages`, { 'x-api-key': apiKey(this.profile, this.secret), 'anthropic-version': '2023-06-01' }, {
       model: this.profile.model, system: req.system, messages, max_tokens: req.maxOutputTokens ?? 4096,
       ...(req.tools.length ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) } : {}),
     }) as { content: ({ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> })[]; usage: { input_tokens: number; output_tokens: number } };
@@ -106,6 +113,28 @@ export class AnthropicModel implements ModelPort {
       usage: { inputTokens: r.usage.input_tokens, outputTokens: r.usage.output_tokens },
     };
   }
+}
+
+/**
+ * Checks a key without spending money: lists the provider's models (a free endpoint on OpenAI-compatible
+ * APIs and Anthropic). Returns the model ids the key can see.
+ */
+export async function listProviderModels(provider: 'openai_compatible' | 'anthropic', baseUrl: string | undefined, key: string): Promise<string[]> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 20_000);
+  try {
+    const url = provider === 'anthropic' ? `${(baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '')}/v1/models?limit=100`
+      : `${(baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '')}/models`;
+    const headers: Record<string, string> = provider === 'anthropic' ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' } : { authorization: `Bearer ${key}` };
+    const res = await fetch(url, { headers, signal: ctl.signal });
+    const text = await res.text();
+    if (!res.ok) throw new ProviderError(res.status === 401 || res.status === 403 ? 'The provider rejected this key' : `Provider returned ${res.status}: ${text.slice(0, 200)}`, false, res.status);
+    const body = JSON.parse(text) as { data?: { id: string }[] };
+    return (body.data ?? []).map((m) => m.id).sort();
+  } catch (e) {
+    if (e instanceof ProviderError) throw e;
+    throw new ProviderError(`Could not reach the provider: ${(e as Error).message}`, true);
+  } finally { clearTimeout(timer); }
 }
 
 function safeJson(s: string): Record<string, unknown> {

@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import os from 'node:os';
 import path from 'node:path';
 import type { ModelProfile } from '../config/config.js';
-import { costOf, estimateTokens, ProviderError, type ModelPort, type ModelRequest, type ModelResponse } from './modelPort.js';
+import { apiKey, costOf, estimateTokens, ProviderError, type ModelPort, type ModelRequest, type ModelResponse, type SecretLookup } from './modelPort.js';
 
 interface LedgerFile { version: 1; keys: Record<string, { spent_usd: number; calls: number; entries: { at: string; model: string; input: number; output: number; usd: number }[] }> }
 
@@ -32,8 +32,9 @@ export class SpendGuard {
   }
 
   /** Fingerprint of the API key (never the key itself). */
-  static keyId(profile: ModelProfile): string {
-    const key = profile.api_key_env ? process.env[profile.api_key_env] ?? '' : '';
+  static keyId(profile: ModelProfile, secret?: SecretLookup): string {
+    let key = '';
+    try { key = apiKey(profile, secret); } catch { /* unknown key: counted under the empty-key bucket */ }
     return `${profile.provider}:${createHash('sha256').update(key).digest('hex').slice(0, 12)}`;
   }
 
@@ -58,14 +59,16 @@ export class SpendGuard {
 
 /** Wraps a real provider: worst-case pre-check against the lifetime cap, then records actual usage. */
 export class SpendGuardedModel implements ModelPort {
-  constructor(private readonly inner: ModelPort, private readonly guard: SpendGuard) {}
+  constructor(private readonly inner: ModelPort, private readonly guard: SpendGuard, private readonly secret?: SecretLookup) {}
   get profile() { return this.inner.profile; }
 
   async generate(req: ModelRequest): Promise<ModelResponse> {
     const p = this.inner.profile;
-    if (p.price_per_million.input <= 0 || p.price_per_million.output <= 0)
+    // Keyless endpoints (e.g. Ollama on the CEO's machine) are free to run; paid keys need prices to be capped.
+    const keyed = !!(p.api_key_env || p.api_key_secret);
+    if (keyed && (p.price_per_million.input <= 0 || p.price_per_million.output <= 0))
       throw new ProviderError(`Model profile ${p.key} has no prices; the spend cap cannot be enforced, so the call is refused`, false);
-    const keyId = SpendGuard.keyId(p);
+    const keyId = SpendGuard.keyId(p, this.secret);
     const maxOut = req.maxOutputTokens ?? 4096;
     const inputEst = estimateTokens(req.system + JSON.stringify(req.messages) + JSON.stringify(req.tools)) * 1.3;
     this.guard.assertAllowed(keyId, costOf(p, { inputTokens: inputEst, outputTokens: maxOut }));
