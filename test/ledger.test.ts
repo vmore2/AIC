@@ -145,3 +145,16 @@ describe('ledger: invariants', () => {
     expect(t).toMatchObject({ hold: 'e_stop', status: 'in_progress' });
   });
 });
+
+describe('stray NUL bytes in agent/tool output', () => {
+  it('are stripped before storage, and the hash chain still verifies', async () => {
+    const { stripNul } = await import('../src/ledger/db.js');
+    expect(stripNul({ a: 'x\u0000y', b: ['\u0000'], c: JSON.stringify({ out: 'bin\u0000ary' }) })).toEqual({ a: 'xy', b: [''], c: '{"out":"binary"}' });
+    const s = await setupCompany('M4');
+    ledger = s.ledger;
+    const obj = await s.ledger.run('createObjective', { title: 'NUL\u0000 test', departmentKey: 'engineering', budgetUsd: 1,
+      requirements: [{ key: 'REQ-1', text: 'Output had a NUL \u0000 byte in it' }] }, s.ceo);
+    expect(obj.objectiveId).toBeTruthy();
+    expect((await verifyChain(s.ledger.db)).ok).toBe(true);
+  });
+});

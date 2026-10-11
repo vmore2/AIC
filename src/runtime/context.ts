@@ -10,6 +10,8 @@ export interface TaskContract {
   task: { id: string; kind: string; title: string; spec: string; risk_tier: string; attempt: number; max_attempts: number };
   objective: { id: string; title: string };
   requirements: { key: string; version: number; text: string }[];
+  /** The whole objective's requirements, for context: your work must fit with the rest (same files, same API). */
+  objective_requirements: { key: string; text: string; yours: boolean }[];
   acceptance_criteria: { id: string; statement: string; kind: string; required: boolean; verified_by: string; check?: unknown }[];
   constraints: { id: string; text: string; decided_by: string }[];
   prior_attempt_feedback: string[];
@@ -34,7 +36,15 @@ export interface PlanningBrief {
   plan_format: unknown;
 }
 
-export async function buildTaskContract(q: Queryable, taskId: string, employeeId: string): Promise<TaskContract> {
+/** Optional hints from the runtime (model prices live in the customer's model configuration, not the ledger). */
+export interface ContractHints { priceOf?: (modelProfileKey: string) => { input: number; output: number } | undefined }
+
+/** A rough cost of one task on a model: ~20 tool-using steps of ~6k input / 500 output tokens, plus one retry. */
+export function typicalTaskCostUsd(price: { input: number; output: number }): number {
+  return Math.round(2 * 20 * (6000 * price.input + 500 * price.output) / 1e6 * 1000) / 1000;
+}
+
+export async function buildTaskContract(q: Queryable, taskId: string, employeeId: string, hints: ContractHints = {}): Promise<TaskContract> {
   const task = await getTask(q, taskId);
   const obj = await getObjective(q, task.objective_id);
   const reqs = await q.query<{ key: string; version: number; text: string }>(
@@ -59,6 +69,9 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
     task: { id: task.id, kind: task.kind, title: task.title, spec: task.spec, risk_tier: task.risk_tier, attempt: task.attempt, max_attempts: task.max_attempts },
     objective: { id: obj.id, title: obj.title },
     requirements: reqs.rows,
+    objective_requirements: (await q.query<{ key: string; text: string }>(
+      `SELECT r.key, rv.text FROM requirements r JOIN requirement_versions rv ON rv.requirement_id = r.id AND rv.version = r.current_version
+       WHERE r.objective_id = $1 AND r.status = 'active' ORDER BY r.key`, [obj.id])).rows.map((r) => ({ ...r, yours: reqs.rows.some((x) => x.key === r.key) })),
     acceptance_criteria: criteria.map((c) => ({ id: c.id, statement: c.statement, kind: c.kind, required: c.required, verified_by: c.independence, ...(c.check_spec ? { check: c.check_spec } : {}) })),
     constraints: decisions.rows.map((d) => ({ id: d.id, text: `${d.question} → ${d.decision_text}`, decided_by: d.decided_by })),
     prior_attempt_feedback: feedback,
@@ -83,13 +96,18 @@ export async function buildTaskContract(q: Queryable, taskId: string, employeeId
     contract.planning = {
       requirement_keys: allReqs.rows.map((r) => r.key),
       budget_available_usd: Number(obj.budget_limit) - Number(obj.budget_spent) - Number(obj.budget_reserved) + Number(task.budget_limit) - Number(task.budget_spent),
-      your_team: team.map((s) => {
+      your_team: await Promise.all(team.map(async (s) => {
         const r = dept.roles.find((x) => x.key === s.role)!;
-        return { role: r.key, title: r.title, category: r.category, task_kinds: r.task_kinds, default_criteria: r.criteria_templates.map((c) => c.statement), headcount: s.count };
-      }),
+        const profile = (await q.query<{ model_profile: string }>(`SELECT model_profile FROM employees WHERE department_id = $1 AND role_key = $2 AND status = 'active' LIMIT 1`, [obj.department_id, r.key])).rows[0]?.model_profile;
+        const price = profile ? hints.priceOf?.(profile) : undefined;
+        return { role: r.key, title: r.title, category: r.category, task_kinds: r.task_kinds, default_criteria: r.criteria_templates.map((c) => c.statement), headcount: s.count,
+          ...(price && price.input > 0 ? { typical_task_cost_usd: typicalTaskCostUsd(price) } : {}) };
+      })),
       settings: obj.settings,
       plan_format: {
         summary: 'string', risks: ['string'], open_questions: ['string'],
+        platform_does: 'Independent reviews, merging accepted work into the integration branch, and the final test run are done by the platform. Do not plan tasks for them; plan the work that produces deliverables.',
+        budgeting: 'Give each task at least the typical_task_cost_usd of its owner role (it covers a retry); fewer, larger tasks beat many tiny ones. Keep ~15% of budget_available_usd unallocated for reviews.',
         tasks: [{ ref: 'short-id', title: 'string', kind: 'implementation', spec: 'what to do, specifically', owner_role: 'role key from your_team',
           requirement_keys: ['REQ-1'], depends_on: ['other ref'], budget_usd: 5, criteria: [{ kind: 'deterministic', statement: '…', independence: 'platform', check: { type: 'file_exists', path: '…' } }] }],
       },
@@ -105,18 +123,21 @@ export async function teamDatabases(q: Queryable, departmentId: string) {
 }
 
 /** Context for an independent reviewer: the artifact and the contract, never the producer's reasoning or claims. */
-export async function buildReviewContext(q: Queryable, taskId: string, submissionId: string, diff: string, reviewerId?: string) {
+export async function buildReviewContext(q: Queryable, taskId: string, submissionId: string, diff: string, reviewerId?: string, files: Record<string, string | null> = {}) {
   const contract = await buildTaskContract(q, taskId, (await getTask(q, taskId)).owner_employee_id!);
   const evidence = await q.query<{ statement: string; result: string; independence: string }>(
     `SELECT cr.statement, e.result, e.independence FROM evidence e JOIN criteria cr ON cr.id = e.criterion_id WHERE e.submission_id = $1`, [submissionId]);
   const rubric = contract.acceptance_criteria.filter((c) => c.kind === 'rubric_review');
   return {
-    you_review: 'Judge ONLY the rubric criteria listed under criteria_to_judge, against the verbatim requirements, by reading the change. deterministic_results are checks the platform itself ran on THIS exact commit (e.g. the test suite ran in a sandbox): treat them as fact and do not re-judge or contradict them. Cite a file/line location in the change for every finding. Call review.record_verdict once with a verdict for each criterion.',
-    task: contract.task, requirements: contract.requirements, constraints: contract.constraints,
+    you_review: 'Judge ONLY the rubric criteria listed under criteria_to_judge, against the verbatim requirements, by reading the change. Use objective_requirements as context: fail work that lives somewhere other than where the objective puts it (a different file, module or API than the one the requirements name) or that duplicates an existing implementation instead of extending it.'
+      + ' deterministic_results are checks the platform itself ran on THIS exact commit (e.g. the test suite ran in a sandbox): treat them as fact and do not re-judge or contradict them. Cite a file/line location in the change for every finding. Call review.record_verdict once with a verdict for each criterion.',
+    task: contract.task, requirements: contract.requirements, objective_requirements: contract.objective_requirements, constraints: contract.constraints,
     criteria_to_judge: rubric.map((c) => ({ id: c.id, statement: c.statement })),
     // The reviewer's own standing instructions from the CEO (never the author's).
     ceo_instructions: reviewerId ? await instructionsFor(q, reviewerId) : [],
     deterministic_results: evidence.rows,
-    change: diff.slice(0, 60_000),
+    change: diff.slice(0, 60_000) || '(no changes in this submission — judge the files below as they stand)',
+    // The files the objective's requirements name, as they are in the submitted commit (null = missing).
+    named_files: Object.fromEntries(Object.entries(files).map(([p, c]) => [p, c === null ? null : c.slice(0, 20_000)])),
   };
 }

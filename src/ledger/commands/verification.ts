@@ -148,7 +148,9 @@ export const assignReview: Handler<{ taskId: string; reviewerEmployeeId: string 
   const obj = await getObjective(c.q, task.objective_id, true);
   const failed = Number((await c.q.query<{ n: string }>(`SELECT count(*) AS n FROM runs WHERE review_of_submission_id = $1 AND status <> 'running'`, [sub.id])).rows[0]!.n);
   const objRemaining = Number(obj.budget_limit) - Number(obj.budget_reserved) - Number(obj.budget_spent);
-  const reservation = Math.min(emp.role_snapshot.budget.per_run.max_cost_usd, objRemaining);
+  // A review should not cost more than the work it reviews; capping it also keeps parallel reviews from
+  // starving each other by each reserving the whole remaining objective budget.
+  const reservation = Math.min(emp.role_snapshot.budget.per_run.max_cost_usd, objRemaining, Math.max(0.02, Number(task.budget_limit)));
   const unavailable = failed >= MAX_REVIEW_RUNS ? `the independent review failed ${failed} times` : reservation <= 0 ? 'the objective budget is exhausted' : null;
   if (unavailable) {
     await transitionTask(c, i.taskId, 'ApplyEvaluation', { evaluation: 'uncertain', humanAcceptanceRequired: true }, { reason: `review unavailable: ${unavailable}` });

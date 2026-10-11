@@ -169,7 +169,11 @@ export function compileTeam(raw: unknown): CompileResult {
         notes.push(`"${r.title}" has no deliverables listed; defaulting to a document at ${doc}`);
         criteria.push({ kind: 'deterministic', statement: `${doc} has Summary, Details, Open Questions sections with real content`, independence: 'platform', required: true, check: { type: 'markdown_sections', path: doc, sections: ['Summary', 'Details', 'Open Questions'] } });
       }
-      if (reviewerOf.has(key)) criteria.push({ kind: 'rubric_review', statement: 'The work satisfies the pinned requirements and is fit for purpose', independence: 'different_lineage_model', required: true });
+      if (reviewerOf.has(key)) criteria.push({ kind: 'rubric_review', independence: 'different_lineage_model', required: true,
+        statement: category === 'qa' && doesCode
+          ? 'The tests import and exercise the delivered code (never a copy, stub or mock of it), cover every pinned requirement including error cases, and would fail if that code were wrong'
+          : 'The work satisfies the pinned requirements and is fit for purpose' });
+      else if (category === 'qa') notes.push(`Nobody reviews "${r.title}": its tests are only checked for running, not for testing the real thing. Add it to a reviewer's "reviews".`);
       if (r.human_judges) criteria.push({ kind: 'human_judgment', statement: r.human_judges, independence: 'human', required: true });
       if (r.affects_people && !r.human_judges) criteria.push({ kind: 'human_judgment', statement: 'A responsible human reviews and decides anything that affects an individual', independence: 'human', required: true });
     }
@@ -181,6 +185,7 @@ export function compileTeam(raw: unknown): CompileResult {
       category === 'manager' ? 'Plan work into tasks for your team with clear, checkable acceptance criteria, and submit plans with ledger.propose_plan. Ask the CEO when requirements are ambiguous.' : '',
       category === 'reviewer' ? 'You review independently: judge each criterion separately against the verbatim requirements and cite the exact location of every finding.' : '',
       deliverText ? `Your deliverables: ${deliverText}.` : '',
+      category === 'qa' && doesCode ? 'Design tests from the requirements, but run them against the REAL delivered code imported from its real path — never re-implement, stub or mock the code under test.' : '',
       r.instructions ?? '',
       'Never claim work is complete; independent verification decides. Escalate instead of guessing.',
     ].filter(Boolean).join(' ');

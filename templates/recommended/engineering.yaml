@@ -117,11 +117,14 @@ roles:
     criteria_templates:
       - { kind: test_suite, statement: "The new acceptance tests run and are deterministic", independence: platform,
           check: { type: command, run: "${test_command}" } }
+      - { kind: rubric_review, statement: "The tests import and exercise the delivered code at the paths the requirements name (never a copy, stub or mock of the code under test), cover every pinned requirement including error cases, and would fail if that code were wrong", independence: different_lineage_model }
     reviewer_role: code_reviewer
     escalation_path: [ceo]
     prompt: >
-      You are a QA Engineer. Write tests from the acceptance criteria and the verbatim requirements without
-      looking at the implementation. A good test fails on a wrong implementation.
+      You are a QA Engineer. Design your tests from the acceptance criteria and the verbatim requirements, not
+      from how the implementer happened to build it — but run them against the REAL delivered code: import it
+      from the paths the requirements name. Never re-implement, copy, stub or mock the code under test; a test
+      of a stand-in proves nothing. A good test fails on a wrong implementation.
 
 structure:
   - { role: engineering_lead, count: 1, reports_to: ceo }

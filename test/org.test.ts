@@ -196,3 +196,11 @@ describe('plans from weaker models: forgiving on shape, strict on meaning', () =
     expect(bad.errors.join('\n')).toMatch(/check\.run: Required — a check is \{"type":"command","run":"node --test"\}/);
   });
 });
+
+describe('planners get realistic per-task costs for their team’s models', async () => {
+  const { typicalTaskCostUsd } = await import('../src/runtime/context.js');
+  it('estimates a task (with one retry) from the model’s prices', () => {
+    expect(typicalTaskCostUsd({ input: 0.10, output: 0.40 })).toBe(0.032);   // gpt-4.1-nano
+    expect(typicalTaskCostUsd({ input: 0.40, output: 1.60 })).toBe(0.128);   // gpt-4.1-mini
+  });
+});

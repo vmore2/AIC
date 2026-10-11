@@ -6,7 +6,7 @@ import { chainHash, hashOf } from '../domain/hash.js';
 import { newId } from '../domain/ids.js';
 import type { Principal } from '../domain/types.js';
 import type { AuthzContext, Pdp, PrincipalAttrs } from '../policy/pdp.js';
-import type { Db, Queryable } from './db.js';
+import { stripNul, type Db, type Queryable } from './db.js';
 
 export type ErrorCode =
   | 'forbidden' | 'guard_failed' | 'not_found' | 'conflict' | 'validation'
@@ -132,12 +132,14 @@ async function appendEvents(q: Queryable, events: NewEvent[], principal: Princip
     seq += 1;
     const id = newId('evt');
     const occurredAt = now.toISOString();
-    const body = { seq, id, type: e.type, aggregate_type: e.aggregateType, aggregate_id: e.aggregateId, actor: principal, payload: e.payload, occurred_at: occurredAt };
+    // Hash exactly what is stored: the database layer strips NUL characters, so strip them first here.
+    const payload = stripNul(e.payload);
+    const body = { seq, id, type: e.type, aggregate_type: e.aggregateType, aggregate_id: e.aggregateId, actor: principal, payload, occurred_at: occurredAt };
     const hash = chainHash(prev, body);
     await q.query(
       `INSERT INTO ledger_events (seq, id, type, aggregate_type, aggregate_id, command_key, actor, payload, occurred_at, prev_hash, hash)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [seq, id, e.type, e.aggregateType, e.aggregateId, commandKey, JSON.stringify(principal), JSON.stringify(e.payload), occurredAt, prev, hash]);
+      [seq, id, e.type, e.aggregateType, e.aggregateId, commandKey, JSON.stringify(principal), JSON.stringify(payload), occurredAt, prev, hash]);
     await q.query('INSERT INTO outbox (event_seq, event_type, aggregate_id) VALUES ($1,$2,$3)', [seq, e.type, e.aggregateId]);
     prev = hash;
   }

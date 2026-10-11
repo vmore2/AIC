@@ -146,7 +146,7 @@ export class Workspaces {
   }
 
   /** Platform-performed merge of accepted work into the objective integration branch. */
-  async mergeIntoIntegration(objectiveId: string, sha: string, message: string): Promise<{ ok: boolean; sha?: string; error?: string }> {
+  async mergeIntoIntegration(objectiveId: string, sha: string, message: string): Promise<{ ok: boolean; sha?: string; error?: string; conflicted?: string[] }> {
     const dir = path.join(this.root, 'integration', objectiveId);
     rmSync(dir, { recursive: true, force: true });
     const integration = this.integrationBranch(objectiveId);
@@ -157,8 +157,9 @@ export class Workspaces {
       await this.git(dir, ['fetch', '-q', 'origin', sha]).catch(() => undefined);
       await this.git(dir, ['-c', 'user.name=The AI Company', '-c', 'user.email=platform@aic.local', 'merge', '--no-ff', '-q', '-m', message, sha]);
     } catch (e) {
+      const conflicted = (await this.git(dir, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).split('\n').filter(Boolean);
       await this.git(dir, ['merge', '--abort']).catch(() => undefined);
-      return { ok: false, error: (e as Error).message.slice(0, 500) };
+      return { ok: false, error: conflicted.length ? `conflicts in ${conflicted.join(', ')}` : (e as Error).message.slice(0, 500), conflicted };
     }
     await this.git(dir, ['push', '-q', 'origin', `HEAD:refs/heads/${integration}`]);
     return { ok: true, sha: await this.git(dir, ['rev-parse', 'HEAD']) };

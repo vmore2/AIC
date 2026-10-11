@@ -200,7 +200,10 @@ export const endRun: Handler<{ runId: string; outcome: RunOutcome; reason?: stri
     const current = lease && lease.run_id === run.id && lease.epoch === run.lease_epoch;
     // A suspended run (blocker raised) waits for the human/manager decision; no transition here.
     if (current && ['in_progress', 'awaiting_input'].includes(task.status) && i.outcome !== 'submitted' && i.outcome !== 'suspended') {
-      const budgetExhausted = Number(task.budget_spent) >= Number(task.budget_limit) - 1e-9;
+      // "Exhausted" includes dust: a session with under 10% of the task budget cannot finish anything, so
+      // stop burning attempts and let the CEO decide (retry with more budget, change, or cancel).
+      const left = Number(task.budget_limit) - Number(task.budget_spent);
+      const budgetExhausted = left <= Math.max(0.002, 0.1 * Number(task.budget_limit));
       const r = await transitionTask(c, run.task_id, i.outcome === 'abandoned' || i.outcome === 'interrupted' ? 'RecordRunAbandoned' : 'RecordRunFailed',
         { budgetExhausted }, { reason: `${i.outcome}${i.reason ? `: ${i.reason}` : ''}`, runId: run.id });
       taskStatus = r.to;
@@ -520,7 +523,13 @@ export const completeObjective: Handler<{ objectiveId: string }, { completed: bo
   const r = await c.q.query<{ n: string }>(
     `SELECT count(*) AS n FROM tasks WHERE objective_id = $1 AND kind <> 'planning' AND status NOT IN ('cancelled','superseded')
        AND NOT (status = 'accepted' AND integrity = 'ok')`, [i.objectiveId]);
-  const remaining = Number(r.rows[0]!.n);
+  // Accepted work must also be MERGED: a change that failed to integrate leaves the objective incomplete.
+  const unmerged = Number((await c.q.query<{ n: string }>(
+    `SELECT count(*) AS n FROM tasks t JOIN submission_artifacts sa ON sa.submission_id = t.accepted_submission_id
+       JOIN artifact_versions av ON av.id = sa.artifact_version_id
+     WHERE t.objective_id = $1 AND t.kind <> 'planning' AND t.status = 'accepted' AND av.external_ref LIKE 'git:%'
+       AND NOT EXISTS (SELECT 1 FROM external_actions x WHERE x.task_id = t.id AND x.action = 'merge_integration' AND x.status = 'succeeded')`, [i.objectiveId])).rows[0]!.n);
+  const remaining = Number(r.rows[0]!.n) + unmerged;
   const total = Number((await c.q.query<{ n: string }>(`SELECT count(*) AS n FROM tasks WHERE objective_id = $1 AND kind <> 'planning'`, [i.objectiveId])).rows[0]!.n);
   if (remaining > 0 || total === 0) return { completed: false, remaining };
   await c.q.query(`UPDATE objectives SET status = 'completed', version = version + 1 WHERE id = $1`, [i.objectiveId]);

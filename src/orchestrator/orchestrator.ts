@@ -13,6 +13,7 @@ import type { SandboxPort } from '../execution/sandbox.js';
 import { runAgent, type RunOutcome } from '../runtime/agent.js';
 import { buildReviewContext, buildTaskContract } from '../runtime/context.js';
 import { instructionsFor } from '../ledger/commands/setup.js';
+import { namedPaths } from '../ledger/plan.js';
 import type { CredentialIssuer } from '../runtime/credentials.js';
 import type { ToolGateway } from '../runtime/gateway.js';
 import type { ModelFactory } from '../runtime/models.js';
@@ -180,7 +181,7 @@ export class Orchestrator {
       await this.cmd('materializePlan', { planningTaskId: taskId }, `react:${evId}:materialize`);
       return;
     }
-    await this.integrate(t.id, t.objective_id, evId);
+    if (!(await this.integrate(t.id, t.objective_id, evId))) return; // merge conflict: the task was reopened
     if (await this.checkIntegration(t.id)) return; // regression: the task was reopened
     const deps = await this.d.ledger.db.query<{ task_id: string }>('SELECT task_id FROM task_dependencies WHERE depends_on_id = $1', [taskId]);
     for (const dep of deps.rows) await this.tryReady(dep.task_id, evId);
@@ -189,22 +190,26 @@ export class Orchestrator {
   }
 
   /** Platform-performed merge of accepted work into the objective's integration branch (recorded as an action). */
-  private async integrate(taskId: string, objectiveId: string, evId: string) {
+  private async integrate(taskId: string, objectiveId: string, evId: string): Promise<boolean> {
     const ref = (await this.d.ledger.db.query<{ external_ref: string | null }>(
       `SELECT av.external_ref FROM tasks t JOIN submission_artifacts sa ON sa.submission_id = t.accepted_submission_id
        JOIN artifact_versions av ON av.id = sa.artifact_version_id WHERE t.id = $1`, [taskId])).rows[0]?.external_ref;
-    if (!ref?.startsWith('git:')) return;
+    if (!ref?.startsWith('git:')) return true;
     const sha = ref.slice(4);
     const already = await this.d.ledger.db.query(`SELECT 1 FROM external_actions WHERE task_id = $1 AND action = 'merge_integration' AND status = 'succeeded'`, [taskId]);
-    if (already.rows.length) return;
+    if (already.rows.length) return true;
     const intent = await this.cmd('recordActionIntent', { taskId, runId: null, epoch: 0, connector: 'git', action: 'merge_integration', actionClass: 'A4',
       idempotencyMode: 'natural_key', naturalKey: `${objectiveId}:${sha}`, payload: { sha, branch: this.d.workspaces.integrationBranch(objectiveId) } }, `react:${evId}:merge-intent`);
-    if (!intent) return;
+    if (!intent) return true;
     const { actionId } = intent;
     await this.cmd('recordActionOutcome', { actionId, status: 'attempting' }, `react:${evId}:merge-attempt`);
     const r = await this.d.workspaces.mergeIntoIntegration(objectiveId, sha, `Integrate ${taskId} (${sha.slice(0, 10)})`);
     await this.cmd('recordActionOutcome', { actionId, status: r.ok ? 'succeeded' : 'failed', externalRef: r.sha ? `git:${r.sha}` : undefined, detail: r.error }, `react:${evId}:merge-outcome`);
     this.log(r.ok ? `integrated ${taskId} into ${this.d.workspaces.integrationBranch(objectiveId)}` : `merge conflict integrating ${taskId}: ${r.error}`);
+    // Accepted work that cannot be integrated is not done: send it back to be re-applied on the current code.
+    if (!r.ok) await this.cmd('reopenTask', { taskId, reason: `Your accepted change could not be merged into the objective's integration branch (${r.error}). `
+      + 'Other work was merged after you started. Your next session starts from the current integration branch: re-apply your change on top of it, keeping the other work intact.' }, `react:${evId}:reopen-conflict`);
+    return r.ok;
   }
 
   /**
@@ -359,7 +364,14 @@ export class Orchestrator {
     const sha = art?.external_ref?.startsWith('git:') ? art.external_ref.slice(4) : null;
     if (sha) await this.d.workspaces.commitExistsOnBranch(sha, this.d.workspaces.host.baseBranch).catch(() => false); // refresh probe clone
     const diff = sha ? await this.d.workspaces.diffAgainstBase(sha, t.objective_id) : '';
-    const ctx = await buildReviewContext(this.d.ledger.db, taskId, submissionId, diff, reviewer.id);
+    // Reviewers also see the files the objective names, so a review never judges an empty or partial view.
+    const named: Record<string, string | null> = {};
+    if (sha) {
+      const texts = (await this.d.ledger.db.query<{ text: string }>(
+        `SELECT rv.text FROM requirements r JOIN requirement_versions rv ON rv.requirement_id = r.id AND rv.version = r.current_version WHERE r.objective_id = $1 AND r.status = 'active'`, [t.objective_id])).rows;
+      for (const p of [...new Set(texts.flatMap((r) => namedPaths(r.text)))].slice(0, 8)) named[p] = await this.d.workspaces.showFile(sha, p);
+    }
+    const ctx = await buildReviewContext(this.d.ledger.db, taskId, submissionId, diff, reviewer.id, named);
     const emp = await getEmployee(this.d.ledger.db, reviewer.id);
     this.launch(runId, emp.id, taskId, 0, 'review', emp, `INDEPENDENT REVIEW (clean context; you do not see the author's reasoning):\n${JSON.stringify(ctx, null, 2)}`);
   }
@@ -388,7 +400,7 @@ export class Orchestrator {
       const ws = await this.d.workspaces.createForRun(run.id, t.objective_id, t.id);
       this.d.gateway.attachWorkspace(run.id, ws);
     }
-    const contract = await buildTaskContract(this.d.ledger.db, taskId, emp.id);
+    const contract = await buildTaskContract(this.d.ledger.db, taskId, emp.id, { priceOf: (k) => { try { return this.d.models.profile(k).price_per_million; } catch { return undefined; } } });
     this.launch(run.id, emp.id, taskId, Number(lease.epoch), 'task', emp, `TASK CONTRACT (authoritative, from the ledger):\n${JSON.stringify(contract, null, 2)}`);
   }
 
