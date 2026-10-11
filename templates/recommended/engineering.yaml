@@ -25,7 +25,7 @@ roles:
       - Monitor the team board and resolve blockers within authority
       - Own the integration task and request CEO acceptance for merges to main
     capabilities_required: { structured_output: true, tool_calling: true, min_context_tokens: 128000 }
-    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
+    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.answer_question, ledger.escalate_to_ceo, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
             ledger.ask_question, ledger.raise_blocker, ledger.submit_work, ledger.post_update, ledger.propose_directive,
             knowledge.search, knowledge.remember, knowledge.propose_team_note, fs.read, fs.write, fs.list, sandbox.exec, repo.commit_and_push,
             connections.request, db.schema, db.query]

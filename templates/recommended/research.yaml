@@ -21,7 +21,7 @@ roles:
       - Turn the CEO's question into explicit research questions
       - Plan coverage (sources, segments, time window)
       - Synthesize analyst briefs into a report with confidence levels
-    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
+    tools: [ledger.get_task_contract, ledger.get_team_board, ledger.answer_question, ledger.escalate_to_ceo, ledger.propose_plan, ledger.create_subtask, ledger.assign_task,
             ledger.ask_question, ledger.raise_blocker, ledger.submit_work, ledger.post_update, ledger.propose_directive,
             knowledge.search, fs.read, fs.write, fs.list]
     task_kinds: [planning, research, decision]

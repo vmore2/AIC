@@ -262,10 +262,13 @@ export const proposePlan: Handler<{ taskId: string; plan: unknown }, { proposalI
   const obj = await getObjective(c.q, task.objective_id);
   const dept = await departmentOf(c, obj.department_id);
   const emp = await getEmployee(c.q, c.principal.id);
-  const reqs = await c.q.query<{ key: string }>(`SELECT key FROM requirements WHERE objective_id = $1 AND status = 'active' ORDER BY key`, [obj.id]);
+  const reqs = await c.q.query<{ key: string; text: string }>(
+    `SELECT r.key, rv.text FROM requirements r JOIN requirement_versions rv ON rv.requirement_id = r.id AND rv.version = r.current_version
+     WHERE r.objective_id = $1 AND r.status = 'active' ORDER BY r.key`, [obj.id]);
   const mustCover = await planCoverageKeys(c.q, i.taskId);
   const validation = validatePlan(i.plan, {
     department: dept, leadRoleKey: emp.role_key, requirementKeys: mustCover, knownRequirementKeys: reqs.rows.map((r) => r.key),
+    requirementTexts: Object.fromEntries(reqs.rows.map((r) => [r.key, r.text])),
     budgetRemaining: Number(obj.budget_limit) - Number(obj.budget_spent) - Number(obj.budget_reserved) + Number(task.budget_limit) - Number(task.budget_spent),
     riskFloor: obj.risk_floor, settings: obj.settings,
   });
@@ -663,4 +666,39 @@ export const recordCiResult: Handler<{ sha: string; status: 'success' | 'failure
   if (task.status !== 'accepted') return { attributedTo: taskId, reopened: false };
   await reopenTask(c, { taskId, reason: `Regression reported by CI "${i.name}" on commit ${i.sha.slice(0, 10)}${i.branch ? ` (${i.branch})` : ''}${i.url ? `: ${i.url}` : ''}` });
   return { attributedTo: taskId, reopened: true };
+};
+
+/**
+ * A question routed to a manager gets a short "answer session" for that manager (the platform starts it;
+ * nobody waits on an inbox the AI never reads). Idempotent per escalation via the command key.
+ */
+export const startAnswerRun: Handler<{ escalationId: string }, { runId: string | null }> = async (c, i) => {
+  await c.authorize('escalation.route', { type: 'Escalation', id: i.escalationId }, {});
+  const e = (await c.q.query<{ status: string; routed_to_type: string; routed_to: string }>('SELECT status, routed_to_type, routed_to FROM escalations WHERE id = $1 FOR UPDATE', [i.escalationId])).rows[0];
+  if (!e || e.status !== 'open' || e.routed_to_type !== 'employee') return { runId: null };
+  const emp = await getEmployee(c.q, e.routed_to);
+  if (emp.status !== 'active') return { runId: null };
+  const runId = newId('run');
+  await c.q.query(`INSERT INTO runs (id, employee_id, mode, model_profile, model_family, status, budget_reserved) VALUES ($1,$2,'conversation',$3,$4,'running',1)`,
+    [runId, emp.id, emp.model_profile, emp.model_family]);
+  c.emit({ type: 'escalation.answer_started', aggregateType: 'escalation', aggregateId: i.escalationId, payload: { run_id: runId, manager: emp.id } });
+  return { runId };
+};
+
+/** Send a question up to the CEO: the manager decides it is above their authority, or nobody answered it. */
+export const rerouteEscalation: Handler<{ escalationId: string; reason: string }, { routedTo: string }> = async (c, i) => {
+  const e = (await c.q.query<{ task_id: string; status: string; routed_to_type: string; routed_to: string; body: Record<string, unknown> }>(
+    'SELECT task_id, status, routed_to_type, routed_to, body FROM escalations WHERE id = $1 FOR UPDATE', [i.escalationId])).rows[0];
+  if (!e) throw new DomainError('not_found', 'Escalation not found');
+  if (e.status !== 'open') throw new DomainError('conflict', `Escalation is ${e.status}`);
+  const task = await getTask(c.q, e.task_id);
+  const managesTask = c.principal.type === 'employee' && task.manager_employee_id === c.principal.id && e.routed_to === c.principal.id;
+  await c.authorize(c.principal.type === 'system' ? 'escalation.route' : 'escalation.resolve', { type: 'Task', id: e.task_id },
+    { manages_scope: managesTask, epoch_current: managesTask && (await managerRunActive(c)) });
+  if (e.routed_to_type === 'user') return { routedTo: e.routed_to };
+  const sponsor = (await getObjective(c.q, task.objective_id)).sponsor_user_id;
+  await c.q.query(`UPDATE escalations SET routed_to_type = 'user', routed_to = $2, body = $3, version = version + 1 WHERE id = $1`,
+    [i.escalationId, sponsor, JSON.stringify({ ...e.body, recommendation: e.body['recommendation'] ?? null, routed_note: i.reason.slice(0, 500) })]);
+  c.emit({ type: 'escalation.rerouted', aggregateType: 'escalation', aggregateId: i.escalationId, payload: { from: e.routed_to, to: { type: 'user', id: sponsor }, reason: i.reason.slice(0, 300) } });
+  return { routedTo: sponsor };
 };

@@ -166,7 +166,9 @@ export class Workspaces {
 
   async showFile(sha: string, file: string): Promise<string | null> {
     const dir = path.join(this.root, 'probe');
-    try { return await this.git(dir, ['show', `${sha}:${file.replace(/\\/g, '/')}`]); } catch { return null; }
+    const show = () => this.git(dir, ['show', `${sha}:${file.replace(/\\/g, '/')}`]);
+    try { return await show(); } catch { /* the probe clone may be stale: refresh it and retry once */ }
+    try { await this.commitExistsOnBranch(sha, this.host.baseBranch); return await show(); } catch { return null; }
   }
 
   async diffAgainstBase(sha: string, objectiveId: string): Promise<string> {

@@ -29,6 +29,8 @@ export const TOOL_CATALOG: readonly ToolDef[] = [
   t('ledger.propose_plan', 'A2', 'trusted', 'builtin', [], 'Managers: propose a plan (tasks, criteria, owners, dependencies) to the CEO as a formal proposal.'),
   t('ledger.create_subtask', 'A2', 'trusted', 'builtin', [], 'Managers: create a subtask within your approved scope (attenuated permissions).'),
   t('ledger.assign_task', 'A2', 'trusted', 'builtin', [], 'Managers: assign or reassign a task to one of your reports.'),
+  t('ledger.answer_question', 'A2', 'trusted', 'builtin', [], 'Managers: answer a question one of your reports asked, within your authority. Their task resumes.'),
+  t('ledger.escalate_to_ceo', 'A2', 'trusted', 'builtin', [], 'Managers: send a question up to the CEO when it is above your authority (scope, budget, requirements, anything external).'),
   t('ledger.post_update', 'A2', 'trusted', 'builtin', [], 'Post a progress note. Displayed as a claim, not as status.'),
   t('ledger.propose_directive', 'A2', 'trusted', 'builtin', [], 'In conversation: propose a structured change for the CEO to confirm.'),
   t('review.record_verdict', 'A2', 'trusted', 'builtin', [], 'Reviewers: record a per-criterion verdict with concrete findings.'),

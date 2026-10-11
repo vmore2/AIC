@@ -133,6 +133,20 @@ const BUILTINS: Record<string, BuiltinTool> = {
       return ok({ escalation_id: r.escalationId, blocking: a.blocking }, 'trusted', a.blocking ? 'suspended' : undefined);
     },
   },
+  'ledger.answer_question': {
+    schema: z.object({ escalation_id: z.string(), answer: z.string().min(3).max(4000) }),
+    run: async (env, a: { escalation_id: string; answer: string }, gw) => {
+      const r = await gw.ledger.run('resolveEscalation', { escalationId: a.escalation_id, answer: a.answer }, env.principal);
+      return ok({ status: 'answered', decision_id: r.decisionId, message: 'Answer recorded as a decision; the task resumes.' }, 'trusted', 'submitted');
+    },
+  },
+  'ledger.escalate_to_ceo': {
+    schema: z.object({ escalation_id: z.string(), why: z.string().min(5).max(1000) }),
+    run: async (env, a: { escalation_id: string; why: string }, gw) => {
+      await gw.ledger.run('rerouteEscalation', { escalationId: a.escalation_id, reason: a.why }, env.principal);
+      return ok({ status: 'sent_to_ceo', message: 'The CEO will decide. Your session ends.' }, 'trusted', 'submitted');
+    },
+  },
   'ledger.post_update': {
     schema: z.object({ text: z.string().min(1).max(2000) }),
     run: async (env, a: { text: string }, gw) => { await gw.ledger.run('postUpdate', { taskId: env.claims.taskId!, text: a.text }, env.principal); return ok('Posted (shown as a claim, not as status).'); },
@@ -323,7 +337,14 @@ const PARAMS: Record<string, Record<string, unknown>> = {
         spec: { type: 'string', description: 'exactly what to deliver' }, owner_role: { type: 'string', description: 'a role key from your_team' },
         requirement_keys: { type: 'array', items: { type: 'string' } }, depends_on: { type: 'array', items: { type: 'string' } },
         budget_usd: { type: 'number', description: 'the sum over all tasks must fit budget_available_usd' },
-        criteria: { type: 'array', description: 'optional extra acceptance criteria; role defaults are added automatically', items: { type: 'object' } },
+        criteria: { type: 'array', description: 'Usually leave this out: the role checks (e.g. the test suite) are added automatically, and every file the requirements name is checked automatically. Add one only for something extra.',
+          items: { type: 'object', required: ['kind', 'statement'], properties: {
+            kind: { type: 'string', enum: ['deterministic', 'rubric_review'], description: 'deterministic = the platform runs `check`; rubric_review = the independent reviewer judges `statement`' },
+            statement: { type: 'string', description: 'what must be true' },
+            independence: { type: 'string', enum: ['platform', 'different_lineage_model'], description: 'platform for deterministic, different_lineage_model for rubric_review' },
+            check: { type: 'object', description: 'Required when kind is deterministic. Exactly one of: {"type":"command","run":"node --test"} | {"type":"file_exists","path":"src/cart.js"} | {"type":"markdown_sections","path":"docs/SPEC.md","sections":["Goals","Risks"]}',
+              properties: { type: { type: 'string', enum: ['command', 'file_exists', 'markdown_sections', 'no_placeholder_text'] }, run: { type: 'string' }, path: { type: 'string' }, sections: { type: 'array', items: { type: 'string' } } }, required: ['type'] },
+          } } },
       } } },
       risks: { type: 'array', items: { type: 'string' } },
       open_questions: { type: 'array', items: { type: 'string' } },
@@ -332,6 +353,8 @@ const PARAMS: Record<string, Record<string, unknown>> = {
   'ledger.raise_blocker': { type: 'object', properties: { type: { type: 'string', enum: ['blocker', 'decision_required'] }, question: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, summary: { type: 'string' }, consequences: { type: 'string' } } } }, recommendation: { type: 'string' } }, required: ['question'] },
   'ledger.ask_question': { type: 'object', properties: { question: { type: 'string' }, blocking: { type: 'boolean' } }, required: ['question'] },
   'ledger.post_update': { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+  'ledger.answer_question': { type: 'object', properties: { escalation_id: { type: 'string' }, answer: { type: 'string', description: 'A clear decision the asker can act on' } }, required: ['escalation_id', 'answer'] },
+  'ledger.escalate_to_ceo': { type: 'object', properties: { escalation_id: { type: 'string' }, why: { type: 'string', description: 'Why this needs the CEO' } }, required: ['escalation_id', 'why'] },
   'ledger.propose_directive': { type: 'object', properties: { type: { type: 'string', enum: ['create_objective', 'decision', 'change_requirement'] }, summary: { type: 'string' }, payload: { type: 'object', description: 'create_objective: {title, requirements:[{key:"REQ-1",text}], budget_usd}; decision: {question, decision, objective_id}; change_requirement: {objective_id, key:"REQ-2", text, reason}' } }, required: ['type', 'summary', 'payload'] },
   'review.record_verdict': { type: 'object', properties: { verdicts: { type: 'array', items: { type: 'object', properties: { criterion_id: { type: 'string' }, verdict: { type: 'string', enum: ['pass', 'fail', 'inconclusive'] }, confidence: { type: 'number' }, findings: { type: 'array', items: { type: 'object', properties: { location: { type: 'string' }, description: { type: 'string' }, severity: { type: 'string' } }, required: ['location', 'description'] } } }, required: ['criterion_id', 'verdict'] } } }, required: ['verdicts'] },
   'connections.request': { type: 'object', properties: { kind: { type: 'string', enum: ['postgres', 'mysql'] }, name: { type: 'string', description: 'Short name, e.g. "orders db"' },
@@ -378,7 +401,7 @@ export class ToolGateway {
   private async grantedTools(claims: RunClaims): Promise<string[]> {
     const emp = await getEmployee(this.ledger.db, claims.employeeId);
     if (claims.mode === 'review') return emp.tool_grants.filter((t) => ['review.record_verdict', 'fs.read', 'fs.list', 'knowledge.search', 'ledger.get_task_contract'].includes(t));
-    if (claims.mode === 'conversation') return emp.tool_grants.filter((t) => ['ledger.get_team_board', 'knowledge.search', 'ledger.propose_directive', 'connections.request'].includes(t));
+    if (claims.mode === 'conversation') return emp.tool_grants.filter((t) => ['ledger.get_team_board', 'knowledge.search', 'ledger.propose_directive', 'connections.request', 'ledger.answer_question', 'ledger.escalate_to_ceo'].includes(t));
     const task = await getTask(this.ledger.db, claims.taskId!);
     const taskGrants = new Set(task.tool_grants);
     const tools = emp.tool_grants.filter((t) => taskGrants.has(t));

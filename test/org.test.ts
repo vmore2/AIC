@@ -111,3 +111,88 @@ describe('plan validation', () => {
     expect(v.coverage['REQ-1']).toEqual(['t2']);
   });
 });
+
+describe('plan criteria must be verifiable', () => {
+  const eng = byKey('engineering');
+  const ctx = { department: eng, leadRoleKey: 'engineering_lead', requirementKeys: ['REQ-1'], budgetRemaining: 1, riskFloor: 'R1' as const, settings: { test_command: 'node --test' } };
+  const task = (criteria: object[]) => ({ ref: 'impl', title: 'Build the cart', kind: 'implementation', spec: 'Implement the cart module', owner_role: 'software_engineer', requirement_keys: ['REQ-1'], budget_usd: 0.1, criteria });
+
+  it('refuses an "automatic" criterion with no way to check it, and says how to fix it', () => {
+    const v = validatePlan({ summary: 'Build the cart module', tasks: [task([{ kind: 'deterministic', statement: 'src/cart.js exists and exports createCart', independence: 'platform' }])] }, ctx);
+    expect(v.ok).toBe(false);
+    expect(v.errors.join('\n')).toMatch(/has no check the platform can run\. Add "check": \{"type": "file_exists"/);
+  });
+
+  it('accepts the same criterion with a check, or handed to the reviewer', () => {
+    const ok1 = validatePlan({ summary: 'Build the cart module', tasks: [task([{ kind: 'deterministic', statement: 'src/cart.js exists', independence: 'platform', check: { type: 'file_exists', path: 'src/cart.js' } }])] }, ctx);
+    const ok2 = validatePlan({ summary: 'Build the cart module', tasks: [task([{ kind: 'rubric_review', statement: 'createCart handles quantities as specified', independence: 'different_lineage_model' }])] }, ctx);
+    expect(ok1.errors).toEqual([]);
+    expect(ok2.errors).toEqual([]);
+  });
+});
+
+describe('a test suite that ran nothing is not evidence', async () => {
+  const { ranNoTests } = await import('../src/verification/verifiers.js');
+  it('recognizes zero-test runs across common runners, and not real ones', () => {
+    expect(ranNoTests('TAP version 13\n1..0\n# tests 0\n# pass 0\n')).toBe(true);           // node --test with no test files
+    expect(ranNoTests('No tests found, exiting with code 0')).toBe(true);                   // jest --passWithNoTests
+    expect(ranNoTests('No test files found, exiting with code 0')).toBe(true);              // vitest --passWithNoTests
+    expect(ranNoTests('\n  0 passing (2ms)\n')).toBe(true);                                 // mocha
+    expect(ranNoTests('collected 0 items\n')).toBe(true);                                   // pytest
+    expect(ranNoTests('?   	example.com/app	[no test files]\n')).toBe(true);                // go test
+    expect(ranNoTests('TAP version 13\nok 1 - adds\n1..1\n# tests 1\n# pass 1\n')).toBe(false);
+    expect(ranNoTests('\n  10 passing (5ms)\n')).toBe(false);
+    expect(ranNoTests('Tests:       12 passed, 12 total')).toBe(false);
+  });
+});
+
+describe('QA tests wait for the code they test', () => {
+  const eng = byKey('engineering');
+  const ctx = { department: eng, leadRoleKey: 'engineering_lead', requirementKeys: ['REQ-1', 'REQ-2'], budgetRemaining: 1, riskFloor: 'R1' as const, settings: { test_command: 'node --test' } };
+  it('adds the missing dependency from a QA task to the build tasks for the same requirements', () => {
+    const v = validatePlan({ summary: 'Build and test the cart', tasks: [
+      { ref: 'a', title: 'Build totals', kind: 'implementation', spec: 'Implement totals', owner_role: 'software_engineer', requirement_keys: ['REQ-1'], budget_usd: 0.1 },
+      { ref: 'b', title: 'Build discounts', kind: 'implementation', spec: 'Implement discounts', owner_role: 'software_engineer', requirement_keys: ['REQ-2'], budget_usd: 0.1 },
+      { ref: 'qa', title: 'Acceptance tests', kind: 'implementation', spec: 'Write acceptance tests', owner_role: 'qa_engineer', requirement_keys: ['REQ-1', 'REQ-2'], budget_usd: 0.1 },
+    ] }, ctx);
+    expect(v.errors).toEqual([]);
+    expect(v.tasks.find((t) => t.ref === 'qa')!.depends_on).toEqual(['a', 'b']);
+    expect(v.warnings.join('\n')).toMatch(/\[qa\] tests will start after a, b/);
+  });
+});
+
+describe('files a requirement names become platform-checked deliverables', async () => {
+  const { namedPaths } = await import('../src/ledger/plan.js');
+  it('finds named files, ignoring URLs, versions and prose', () => {
+    expect(namedPaths('Create src/cart.js (ES module) exporting createCart(). Tests in test/cart.test.js.')).toEqual(['src/cart.js', 'test/cart.test.js']);
+    expect(namedPaths('Write the spec in `design/SPEC.md` and update README.md.')).toEqual(['design/SPEC.md', 'README.md']);
+    expect(namedPaths('See https://example.com/docs/a.html, use Node 22.5, e.g. totals, rounded to 0.1.')).toEqual([]);
+  });
+  it('adds a file_exists check to each build task covering the requirement', () => {
+    const eng = byKey('engineering');
+    const v = validatePlan({ summary: 'Build the cart module', tasks: [
+      { ref: 'impl', title: 'Build the cart', kind: 'implementation', spec: 'Implement it', owner_role: 'software_engineer', requirement_keys: ['REQ-1'], budget_usd: 0.1 },
+    ] }, { department: eng, leadRoleKey: 'engineering_lead', requirementKeys: ['REQ-1'], budgetRemaining: 1, riskFloor: 'R1', settings: { test_command: 'node --test' },
+      requirementTexts: { 'REQ-1': 'Create src/cart.js exporting createCart(); tests in test/cart.test.js.' } });
+    expect(v.errors).toEqual([]);
+    const checks = v.tasks[0]!.criteria.filter((c) => c.check?.type === 'file_exists').map((c) => c.statement);
+    expect(checks).toEqual(['src/cart.js exists (named in REQ-1)', 'test/cart.test.js exists (named in REQ-1)']);
+  });
+});
+
+describe('plans from weaker models: forgiving on shape, strict on meaning', () => {
+  const eng = byKey('engineering');
+  const ctx = { department: eng, leadRoleKey: 'engineering_lead', requirementKeys: ['REQ-1'], budgetRemaining: 1, riskFloor: 'R1' as const, settings: { test_command: 'node --test' } };
+  it('accepts {command}/{file} aliases and missing independence, and explains malformed checks', () => {
+    const v = validatePlan({ summary: 'Build the cart module', tasks: [{ ref: 'a', title: 'Build cart', kind: 'implementation', spec: 'Implement the cart', owner_role: 'software_engineer',
+      requirement_keys: ['REQ-1'], budget_usd: 0.1, criteria: [{ kind: 'deterministic', statement: 'tests pass', check: { type: 'command', command: 'node --test' } }, { kind: 'deterministic', statement: 'cart exists', check: { file: 'src/cart.js' } }, { kind: 'rubric_review', statement: 'Readable code' }] }] }, ctx);
+    expect(v.errors).toEqual([]);
+    const crit = v.tasks[0]!.criteria;
+    expect(crit.find((c) => c.statement === 'tests pass')!.check).toEqual({ type: 'command', run: 'node --test', timeout_s: 600 });
+    expect(crit.find((c) => c.statement === 'cart exists')!.check).toEqual({ type: 'file_exists', path: 'src/cart.js' });
+    expect(crit.find((c) => c.statement === 'Readable code')!.independence).toBe('different_lineage_model');
+    const bad = validatePlan({ summary: 'Build the cart module', tasks: [{ ref: 'a', title: 'Build cart', kind: 'implementation', spec: 'Implement the cart', owner_role: 'software_engineer',
+      requirement_keys: ['REQ-1'], budget_usd: 0.1, criteria: [{ kind: 'deterministic', statement: 'tests pass', check: { type: 'command' } }] }] }, ctx);
+    expect(bad.errors.join('\n')).toMatch(/check\.run: Required — a check is \{"type":"command","run":"node --test"\}/);
+  });
+});

@@ -134,6 +134,9 @@ export class Orchestrator {
       case 'release.approved':
         await this.release(ev.aggregate_id, String(p['integration_sha']), String(p['approval_id']));
         break;
+      case 'escalation.raised':
+        if ((p['routed_to'] as { type?: string } | undefined)?.type === 'employee') this.answerQuestion(ev.aggregate_id);
+        break;
       default:
         break;
     }
@@ -441,11 +444,58 @@ ${PLATFORM_RULES}
     return { reply, directives: dirs.rows.map((d) => ({ id: d.id, type: d.directive_type, summary: d.payload.summary, payloadSha256: d.payload_sha256 })) };
   }
 
+  // ------------------------------------------------------------------ managers answer their reports
+
+  private readonly answering = new Set<string>();
+  /** The manager a question was routed to gets a short session to answer it or send it to the CEO. */
+  private answerQuestion(escalationId: string) {
+    if (this.answering.has(escalationId)) return;
+    this.answering.add(escalationId);
+    const p = (async () => {
+      const q = this.d.ledger.db;
+      const started = await this.cmd('startAnswerRun', { escalationId }, `answer:${escalationId}`);
+      if (started?.runId) {
+        const runId = started.runId;
+        const e = (await q.query<{ task_id: string; raised_by: string; body: { question: string; recommendation?: string | null; options?: unknown[] } }>(
+          'SELECT task_id, raised_by, body FROM escalations WHERE id = $1', [escalationId])).rows[0]!;
+        const emp = await getEmployee(q, (await getRun(q, runId)).employee_id);
+        const task = await getTask(q, e.task_id);
+        const contract = await buildTaskContract(q, e.task_id, task.owner_employee_id ?? emp.id).catch(() => null);
+        const first = `A MEMBER OF YOUR TEAM ASKED YOU A QUESTION. Decide it if it is within your authority (how to build, split, test, or interpret the
+requirements technically); send it to the CEO if it changes scope, budget, requirements, deadlines, or anything outside the company.
+${JSON.stringify({ escalation_id: escalationId, asked_by: (await getEmployee(q, e.raised_by).catch(() => null))?.display_name ?? e.raised_by, question: e.body.question,
+          options: e.body.options ?? [], their_recommendation: e.body.recommendation ?? null,
+          task: { title: task.title, spec: task.spec }, requirements: contract?.requirements ?? [], ceo_instructions: await instructionsFor(q, emp.id) }, null, 2)}
+Call ledger.answer_question with a clear decision, or ledger.escalate_to_ceo explaining why.`;
+        const claims = { runId, employeeId: emp.id, taskId: null, epoch: 0, mode: 'conversation' as const };
+        const model = this.d.models.create(emp.model_profile, { roleKey: emp.role_key, category: emp.category, mode: 'conversation' });
+        this.log(`run ${runId} started: ${emp.display_name} answers a question (${escalationId})`);
+        const res = await runAgent({ ledger: this.d.ledger, gateway: this.d.gateway, model, token: this.d.issuer.issue(claims), claims: { ...claims, exp: 0 },
+          system: `You are ${emp.display_name}, ${emp.role_snapshot.title}.
+Charter: ${emp.role_snapshot.charter}
+${emp.role_snapshot.prompt}
+${PLATFORM_RULES}`,
+          firstMessage: first, maxSteps: 6, transcriptDir: path.join(this.d.storageDir, 'transcripts') }).catch((err) => ({ outcome: 'failed', reason: String(err) } as { outcome: string; reason?: string }));
+        await this.cmd('endRun', { runId, outcome: res.outcome === 'submitted' || res.outcome === 'completed' ? 'completed' : 'failed', reason: res.reason }, `end:${runId}`);
+      }
+      // Nothing may stay stuck: if the manager did not decide, the CEO gets the question.
+      const still = (await q.query<{ status: string; routed_to_type: string }>('SELECT status, routed_to_type FROM escalations WHERE id = $1', [escalationId])).rows[0];
+      if (still?.status === 'open' && still.routed_to_type === 'employee') {
+        await this.cmd('rerouteEscalation', { escalationId, reason: 'Their lead could not answer it automatically.' }, `reroute:${escalationId}`);
+        this.log(`question ${escalationId} sent to the CEO`);
+      }
+    })().catch((e) => this.log(`answering ${escalationId} failed: ${(e as Error).message}`)).finally(() => { this.answering.delete(escalationId); this.active.delete(`answer:${escalationId}`); });
+    this.active.set(`answer:${escalationId}`, p);
+  }
+
   // ------------------------------------------------------------------ drift repair (watchdog)
 
   async repair(): Promise<number> {
     const q = this.d.ledger.db;
     let n = 0;
+    // Questions routed to a manager that nobody is answering (e.g. after a restart) get answered or go to the CEO.
+    const orphanQs = await q.query<{ id: string }>(`SELECT id FROM escalations WHERE status = 'open' AND routed_to_type = 'employee'`);
+    for (const e of orphanQs.rows) if (!this.answering.has(e.id)) { this.answerQuestion(e.id); n++; }
     // Expired leases of runs nobody is executing → abandoned (re-dispatched within attempt limits).
     const expired = await q.query<{ run_id: string }>(
       `SELECT l.run_id FROM task_leases l JOIN runs r ON r.id = l.run_id WHERE l.state = 'active' AND l.expires_at < now() AND r.status = 'running'`);

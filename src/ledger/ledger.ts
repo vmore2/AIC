@@ -24,6 +24,8 @@ export const COMMANDS = {
   setStack: setup.setStack,
   setDefaultModel: setup.setDefaultModel,
   setInstructions: setup.setInstructions,
+  startAnswerRun: work.startAnswerRun,
+  rerouteEscalation: work.rerouteEscalation,
   requestConnection: setup.requestConnection,
   provideConnection: setup.provideConnection,
   declineConnection: setup.declineConnection,

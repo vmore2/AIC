@@ -60,8 +60,12 @@ export async function runDeterministicVerifiers(d: VerifierDeps, taskId: string)
       switch (check.type) {
         case 'command': {
           const r = await d.sandbox.exec(checkout, String(check['run']), Number(check['timeout_s'] ?? 600) * 1000);
-          await record(c.id, 'svc_command_runner', 'sandboxed_runner', r.exitCode === 0 ? 'pass' : r.exitCode === null && !r.timedOut ? 'error' : 'fail',
-            { command: check['run'], exit_code: r.exitCode, timed_out: r.timedOut, stdout_tail: r.stdout.slice(-4000), stderr_tail: r.stderr.slice(-4000), sandbox_isolated: d.sandbox.isolated, commit: sha });
+          // A test suite that ran nothing proves nothing: many runners exit 0 when no tests are found.
+          const vacuous = c.kind === 'test_suite' && r.exitCode === 0 && ranNoTests(`${r.stdout}
+${r.stderr}`);
+          await record(c.id, 'svc_command_runner', 'sandboxed_runner', vacuous ? 'fail' : r.exitCode === 0 ? 'pass' : r.exitCode === null && !r.timedOut ? 'error' : 'fail',
+            { command: check['run'], exit_code: r.exitCode, timed_out: r.timedOut, ...(vacuous ? { reason: 'The command succeeded but ran no tests, so it verifies nothing. Add tests that exercise the requirements.' } : {}),
+              stdout_tail: r.stdout.slice(-4000), stderr_tail: r.stderr.slice(-4000), sandbox_isolated: d.sandbox.isolated, commit: sha });
           break;
         }
         case 'file_exists':
@@ -106,4 +110,13 @@ function sectionBody(text: string, heading: string): string {
     body.push(l);
   }
   return body.join('\n');
+}
+
+/** Recognizes "zero tests ran" in the output of common runners (node:test/TAP, Jest, Vitest, Mocha, pytest, go test). */
+export function ranNoTests(output: string): boolean {
+  return /^# tests 0\s*$/m.test(output) || /^1\.\.0\s*$/m.test(output)
+    || /No tests found|No test files found|Tests:\s+0 total/i.test(output)
+    || /^\s*0 passing/m.test(output) && !/[1-9]\d* passing/.test(output)
+    || /collected 0 items|no tests ran/i.test(output)
+    || /\[no test files\]/.test(output) && !/^ok\s/m.test(output);
 }
