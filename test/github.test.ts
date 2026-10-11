@@ -45,3 +45,27 @@ describe('GitHub release connector (simulated GitHub; no network)', () => {
     await expect(gh.mergePinned(7, 'stale', 'Release')).rejects.toBeInstanceOf(GitHubError);
   });
 });
+
+describe('GitHub credentials never leak into clones, errors, or agent-readable files', () => {
+  const SECRET = 'github_pat_11ABCDEFG0123456789_leakcanary';
+  it('keeps the token out of the remote URL and passes it only as a per-command header', async () => {
+    const { GitHubCodeHost } = await import('../src/execution/codeHost.js');
+    process.env['LEAK_TEST_TOKEN'] = SECRET;
+    const host = new GitHubCodeHost('acme/app', 'LEAK_TEST_TOKEN');
+    expect(host.remote()).toBe('https://github.com/acme/app.git');
+    const env = host.gitEnv();
+    expect(env).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader' });
+    expect(Buffer.from(env['GIT_CONFIG_VALUE_0']!.split(' ').pop()!, 'base64').toString()).toBe(`x-access-token:${SECRET}`);
+    delete process.env['LEAK_TEST_TOKEN'];
+  });
+
+  it('scrubs credentials from git failures (command lines and stderr)', async () => {
+    const { git, redactSecrets } = await import('../src/execution/codeHost.js');
+    expect(redactSecrets(`git ls-remote https://x-access-token:${SECRET}@github.com/a/b.git`)).toBe('git ls-remote https://***@github.com/a/b.git');
+    expect(redactSecrets(`token ${SECRET} and ghp_abcDEF123`)).toBe('token github_pat_*** and ghp_***');
+    expect(redactSecrets('AUTHORIZATION: basic eC1hY2Nlc3M=')).toBe('AUTHORIZATION: basic ***');
+    const err = await git(process.cwd(), ['ls-remote', `https://x-access-token:${SECRET}@127.0.0.1:9/nope.git`]).catch((e: Error & { stderr: string }) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(`${(err as Error).message} ${(err as Error & { stderr: string }).stderr}`).not.toContain(SECRET);
+  }, 30_000);
+});
