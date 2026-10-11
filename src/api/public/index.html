@@ -67,7 +67,7 @@ const api = async (p, opts = {}) => {
   return body;
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const views = { Overview: overview, Inbox: inboxView, Org: team, Teams: teamsView, 'Build a team': () => builder(), Talk: talk, Audit: audit };
+const views = { Overview: overview, Inbox: inboxView, Org: team, Teams: teamsView, 'Build a team': () => builder(), Talk: talk, People: people, Audit: audit };
 let current = 'Overview';
 const nav = document.getElementById('nav');
 function renderNav() { nav.innerHTML = Object.keys(views).map((k) => `<button class="${k === current ? 'active' : ''}" data-v="${k}">${k}</button>`).join(''); }
@@ -226,6 +226,32 @@ document.getElementById('estop').onclick = async () => {
   document.getElementById('estop').textContent = 'STOPPED'; refresh();
 };
 
+// ---------------------------------------------------------------- people (who can sign in)
+const ROLE_HELP = { approver: 'approves plans, accepts work, curates team notes', viewer: 'read-only', auditor: 'read-only + audit trail', member: 'talks to teams', admin: 'manages people and teams' };
+async function people(note = '') {
+  const users = await api('/api/users');
+  view.innerHTML = `${note}<div class="card"><b>Add a person</b>
+    <p class="muted">They sign in with Google using this email. Adding people is a governance action: you may be asked to confirm with Google first.</p>
+    <div class="row"><input id="pname" placeholder="Name"><input id="pemail" placeholder="name@gmail.com" type="email">
+      <select id="prole" style="width:auto">${Object.keys(ROLE_HELP).map((r) => `<option value="${r}">${r}</option>`).join('')}</select>
+      <button class="act" id="padd">Add</button></div><div class="muted" id="prolehelp">${ROLE_HELP.approver}</div></div>
+    <div class="card"><table><tr><th>Name</th><th>Role</th><th>Signs in as</th><th>Tokens</th><th></th></tr>
+    ${users.map((u) => `<tr><td>${esc(u.name)}</td><td>${u.role}</td><td>${u.email ? esc(u.email) : '<span class="muted">no access</span>'}</td><td>${u.active_tokens}</td>
+      <td>${u.role !== 'ceo' && (u.email || u.active_tokens) ? `<button class="sec" data-remove="${u.id}">Remove access</button>` : ''}</td></tr>`).join('')}</table></div>`;
+  document.getElementById('prole').onchange = (e) => { document.getElementById('prolehelp').textContent = ROLE_HELP[e.target.value]; };
+  document.getElementById('padd').onclick = async () => {
+    try {
+      const r = await api('/api/users', { method: 'POST', body: JSON.stringify({ name: document.getElementById('pname').value, email: document.getElementById('pemail').value, role: document.getElementById('prole').value }) });
+      people(`<div class="card ok">Added. ${esc(r.signIn)}</div>`);
+    } catch (e) { people(`<div class="card bad">${esc(e.message)}</div>`); }
+  };
+  view.querySelectorAll('[data-remove]').forEach((b) => b.onclick = async () => {
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Click again to remove'; return; }
+    try { await api(`/api/users/${b.dataset.remove}/remove`, { method: 'POST', body: '{}' }); people('<div class="card ok">Access removed; their sessions and tokens no longer work.</div>'); }
+    catch (e) { people(`<div class="card bad">${esc(e.message)}</div>`); }
+  });
+}
+
 // ---------------------------------------------------------------- team catalog
 async function teamsView() {
   const teams = await api('/api/catalog');
@@ -375,6 +401,7 @@ async function signOut() { await api('/auth/logout', { method: 'POST', body: '{}
 api('/api/me').then((m) => {
   const me = document.getElementById('me');
   me.innerHTML = `${esc(m.name)} · ${esc(m.role)}${m.owner ? ' (owner)' : ''} <a href="#" id="signout">sign out</a>`;
+  if (!['ceo', 'admin'].includes(m.role)) { delete views.People; renderNav(); }
   document.getElementById('signout').onclick = (e) => { e.preventDefault(); signOut(); };
 }).catch(async () => {
   const cfg = await fetch('/api/auth/config').then((r) => r.json()).catch(() => ({}));

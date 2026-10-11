@@ -133,6 +133,25 @@ describe('Google sign-in (mock Google)', () => {
     const viewerStop = await server.inject({ method: 'POST', url: '/api/emergency-stop', payload: { reason: 'x' }, headers: { ...host, cookie: vs, 'x-requested-with': 'aic' } });
     expect(viewerStop.statusCode).toBe(403);
 
+    // People management from the dashboard: CEO/admin only; adding needs a fresh sign-in; nobody can mint a second CEO.
+    const w = (cookie: string) => ({ ...host, cookie, 'x-requested-with': 'aic' });
+    expect((await server.inject({ url: '/api/users', headers: { ...host, cookie: vs } })).statusCode).toBe(403);
+    const list = (await server.inject({ url: '/api/users', headers: { ...host, cookie: session } })).json() as { email: string }[];
+    expect(list.map((u) => u.email)).toEqual(['casey@acme.test', 'vic@acme.test']);
+    expect((await server.inject({ method: 'POST', url: '/api/users', payload: { name: 'Eve', email: 'eve@acme.test', role: 'ceo' }, headers: w(session) })).statusCode).toBe(400);
+    expect((await server.inject({ method: 'POST', url: '/api/users', payload: { name: 'Ann', email: 'not-an-email', role: 'approver' }, headers: w(session) })).statusCode).toBe(400);
+    const staleAdd = await stale.inject({ method: 'POST', url: '/api/users', payload: { name: 'Ann', email: 'ann@acme.test', role: 'approver' }, headers: w(session) });
+    expect(staleAdd.json().step_up_url).toBe('/auth/google?stepup=1');
+    const added = await server.inject({ method: 'POST', url: '/api/users', payload: { name: 'Ann', email: 'Ann@Acme.test', role: 'approver' }, headers: w(session) });
+    expect(added.statusCode).toBe(200);
+    expect(added.json().signIn).toMatch(/Sign in with Google as ann@acme.test/);
+    // Removing access ends the viewer's existing Google session immediately; the CEO can't be removed.
+    expect((await server.inject({ method: 'POST', url: `/api/users/${b.ceoUserId}/remove`, payload: {}, headers: w(session) })).statusCode).toBe(409);
+    expect((await server.inject({ method: 'POST', url: `/api/users/${viewer.userId}/remove`, payload: {}, headers: w(session) })).statusCode).toBe(200);
+    expect((await server.inject({ url: '/api/me', headers: { ...host, cookie: vs } })).statusCode).toBe(401);
+    s = await signIn('vic@acme.test');
+    expect((await s.callback(`code=good-code&state=${s.state}`)).statusCode).toBe(403);
+
     // Signing out clears the session cookie.
     const out = await server.inject({ method: 'POST', url: '/auth/logout', headers: host });
     expect(String(out.headers['set-cookie'])).toMatch(/aic_session=; .*Max-Age=0/);

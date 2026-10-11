@@ -25,7 +25,10 @@ export const bootstrapCompany: Handler<{ companyName: string; ceoName: string; c
 export const addUser: Handler<{ name: string; email?: string; role: 'admin' | 'approver' | 'member' | 'viewer' | 'auditor' }, { userId: string }> = async (c, i) => {
   await c.authorize('employee.hire', { type: 'Company', id: 'company' }, {});
   const userId = newId('usr');
+  if (!['admin', 'approver', 'member', 'viewer', 'auditor'].includes(i.role)) throw new DomainError('validation', `Role must be admin, approver, member, viewer or auditor (got "${i.role}")`);
+  if (!i.name?.trim()) throw new DomainError('validation', 'A name is required');
   const email = i.email?.trim().toLowerCase() || null;
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new DomainError('validation', `"${i.email}" is not an email address`);
   if (email && (await c.q.query('SELECT 1 FROM users WHERE lower(email) = $1', [email])).rows.length) throw new DomainError('conflict', `${email} already belongs to another user`);
   await c.q.query('INSERT INTO users (id, name, email, role) VALUES ($1,$2,$3,$4)', [userId, i.name, email, i.role]);
   c.emit({ type: 'user.added', aggregateType: 'user', aggregateId: userId, payload: { name: i.name, role: i.role } });
@@ -43,6 +46,18 @@ export const setUserEmail: Handler<{ userId: string; email: string }, { userId: 
   if (taken) throw new DomainError('conflict', `${email} already belongs to another user`);
   await c.q.query('UPDATE users SET email = $2 WHERE id = $1', [i.userId, email]);
   c.emit({ type: 'user.email_set', aggregateType: 'user', aggregateId: i.userId, payload: { email } });
+  return { userId: i.userId };
+};
+
+/** Remove a person's access: revoke every token and clear their sign-in email (ends Google sessions too). */
+export const removeAccess: Handler<{ userId: string }, { userId: string }> = async (c, i) => {
+  await c.authorize('employee.hire', { type: 'User', id: i.userId }, { action_class: 'A6' });
+  const u = (await c.q.query<{ role: string }>('SELECT role FROM users WHERE id = $1', [i.userId])).rows[0];
+  if (!u) throw new DomainError('not_found', `User ${i.userId} not found`);
+  if (u.role === 'ceo') throw new DomainError('guard_failed', "The CEO's access cannot be removed");
+  await c.q.query('UPDATE access_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [i.userId]);
+  await c.q.query('UPDATE users SET email = NULL WHERE id = $1', [i.userId]);
+  c.emit({ type: 'user.access_removed', aggregateType: 'user', aggregateId: i.userId, payload: {} });
   return { userId: i.userId };
 };
 

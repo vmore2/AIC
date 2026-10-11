@@ -15,6 +15,7 @@ export const COMMANDS = {
   bootstrapCompany: org.bootstrapCompany,
   addUser: org.addUser,
   setUserEmail: org.setUserEmail,
+  removeAccess: org.removeAccess,
   issueAccessToken: org.issueAccessToken,
   revokeAccessToken: org.revokeAccessToken,
   hireDepartment: org.hireDepartment,

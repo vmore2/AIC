@@ -125,6 +125,30 @@ export function buildServer(app: App, token: string, opts: { google?: GoogleAuth
   });
   server.post<{ Params: { id: string }; Body: { decision: 'approve' | 'reject'; reason?: string } }>('/api/notes/:id', async (req) =>
     app.ledger.run('curateNote', { noteId: req.params.id, decision: req.body.decision, reason: req.body.reason }, await who(req), key(req)));
+  // ---- people (who can sign in). Listing shows emails, so only the CEO and admins see it; changes go
+  // through the policy engine (governance: owner session or a fresh Google sign-in).
+  const requireManager = async (req: FastifyRequest) => {
+    const p = await who(req);
+    const role = (await db.query<{ role: string }>('SELECT role FROM users WHERE id = $1', [p.id])).rows[0]?.role;
+    if (role !== 'ceo' && role !== 'admin') throw new DomainError('forbidden', 'Only the CEO or an admin can manage people');
+    return p;
+  };
+  server.get('/api/users', async (req) => {
+    await requireManager(req);
+    return (await db.query(`SELECT u.id, u.name, u.role, u.email, u.created_at,
+      (SELECT count(*)::int FROM access_tokens a WHERE a.user_id = u.id AND a.revoked_at IS NULL) AS active_tokens FROM users u ORDER BY u.created_at`)).rows;
+  });
+  server.post<{ Body: { name: string; email: string; role: 'admin' | 'approver' | 'member' | 'viewer' | 'auditor' } }>('/api/users', async (req) => {
+    const p = await requireManager(req);
+    if (!req.body?.email?.trim()) throw new DomainError('validation', 'An email is required (it is how they sign in with Google)');
+    const r = await app.ledger.run('addUser', { name: req.body.name, email: req.body.email, role: req.body.role }, p, key(req));
+    return { ...r, signIn: opts.google ? `${opts.google.cfg.publicUrl} → Sign in with Google as ${req.body.email.trim().toLowerCase()}` : 'Google sign-in is not configured; issue a token with `aic users add`' };
+  });
+  server.post<{ Params: { id: string }; Body: { email: string } }>('/api/users/:id/email', async (req) =>
+    app.ledger.run('setUserEmail', { userId: req.params.id, email: req.body.email }, await requireManager(req), key(req)));
+  server.post<{ Params: { id: string } }>('/api/users/:id/remove', async (req) =>
+    app.ledger.run('removeAccess', { userId: req.params.id }, await requireManager(req), key(req)));
+
   server.get('/api/me', async (req) => {
     const p = await who(req);
     const u = (await db.query<{ name: string; role: string }>('SELECT name, role FROM users WHERE id = $1', [p.id])).rows[0];
