@@ -1,4 +1,4 @@
-// The AI Company — CEO dashboard. Plain JavaScript, no build step, no CDN (customer installs work offline).
+// AIC — CEO dashboard. Plain JavaScript, no build step, no CDN (customer installs work offline).
 // Every change goes through the API → ledger commands; this file only renders and asks.
 'use strict';
 
@@ -202,7 +202,7 @@ function renderShell() {
   const dark = document.documentElement.dataset.theme === 'dark';
   $('#app').innerHTML = `<div class="shell">
     <aside class="side" id="side">
-      <div class="brand"><div class="mark"></div><div><b id="co-name">${esc(S.companyName || 'The AI Company')}</b><small>CEO console</small></div></div>
+      <div class="brand"><div class="mark"></div><div><b id="co-name">${esc(S.companyName || 'AIC')}</b><small>CEO console</small></div></div>
       <nav class="nav" id="nav"></nav>
       <div class="grow"></div>
       <button class="btn hold" id="hold" title="Press and hold to stop all consequential work">${icon('stop')}<span>Hold to stop all work</span></button>
@@ -1114,7 +1114,7 @@ function wireHold() {
 /* ================================================================== boot */
 async function signInScreen() {
   const cfg = await fetch('/api/auth/config').then((r) => r.json()).catch(() => ({}));
-  $('#app').innerHTML = `<div class="signin"><div class="card"><div class="mark"></div><h1 style="font-size:22px">The AI Company</h1><p class="muted" style="margin-top:6px">Your company’s AI departments — accountable, verified, under your control.</p>
+  $('#app').innerHTML = `<div class="signin"><div class="card"><div class="mark"></div><h1 style="font-size:22px">AIC</h1><p class="muted" style="margin-top:6px">Your company’s AI departments — accountable, verified, under your control.</p>
     ${cfg.google ? `<a class="gbtn" href="/auth/google">${GOOGLE}Continue with Google</a><p class="small muted">Only people your CEO added can sign in.</p>` : ''}
     <div class="hr"></div><p class="small muted">Or open the link printed by <code>aic serve</code> (it carries a one-time owner token).</p></div></div>`;
 }

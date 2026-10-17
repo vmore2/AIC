@@ -1,4 +1,4 @@
-# The AI Company
+# AIC
 
 [![CI](https://github.com/vmore2/AIC/actions/workflows/ci.yml/badge.svg)](https://github.com/vmore2/AIC/actions/workflows/ci.yml)
 
@@ -43,6 +43,7 @@ to the service it belongs to (your AI provider, GitHub, your database). Employee
 - [Development and tests](#development-and-tests)
 - [How it works](#how-it-works)
 - [Status and limitations](#status-and-limitations)
+- [License](#license)
 
 ---
 
@@ -562,3 +563,9 @@ Known gaps:
 - **Hired teams.** A hired team keeps the role definitions it was hired with. Edits to a team file apply
   to new hires.
 - **The offline demo model** handles only the bundled demo scenario.
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 vmore2. Use it, change it, and run it for your own company.

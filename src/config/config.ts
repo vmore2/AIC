@@ -1,4 +1,4 @@
-// Customer configuration. The AI Company hosts nothing: each company supplies its own
+// Customer configuration. AIC hosts nothing: each company supplies its own
 // database, model providers and keys, and code hosting. Secrets are referenced by
 // environment-variable name and never stored in config files or the ledger.
 import { existsSync, readFileSync } from 'node:fs';
@@ -121,7 +121,7 @@ export function loadConfig(file = DEFAULT_CONFIG_FILE, baseDir = process.cwd()):
   return cfg;
 }
 
-export const STARTER_CONFIG = `# The AI Company — customer configuration.
+export const STARTER_CONFIG = `# AIC — customer configuration.
 # You bring the infrastructure: database, model providers/keys, and code hosting.
 # Secrets are referenced by environment variable NAME only. Put the values in a .env file next to this
 # one (the platform repository has .env.example listing every variable). Check your setup: aic doctor

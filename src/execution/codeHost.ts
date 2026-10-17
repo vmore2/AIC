@@ -66,9 +66,9 @@ export class LocalCodeHost implements CodeHost {
     mkdirSync(seed, { recursive: true });
     await git(seed, ['init', '--initial-branch=main']);
     const { writeFileSync } = await import('node:fs');
-    writeFileSync(path.join(seed, 'README.md'), '# Company deliverables\n\nManaged by The AI Company. Work happens on aic/* branches; accepted work is merged into objective integration branches.\n');
+    writeFileSync(path.join(seed, 'README.md'), '# Company deliverables\n\nManaged by AIC. Work happens on aic/* branches; accepted work is merged into objective integration branches.\n');
     await git(seed, ['add', '-A']);
-    await git(seed, ['-c', 'user.name=The AI Company', '-c', 'user.email=platform@aic.local', 'commit', '-m', 'Initialize deliverables repository']);
+    await git(seed, ['-c', 'user.name=AIC', '-c', 'user.email=platform@aic.local', 'commit', '-m', 'Initialize deliverables repository']);
     await this.allowLongPaths();
     await git(seed, ['push', this.repoPath, 'main']);
     rmSync(seed, { recursive: true, force: true });
@@ -182,7 +182,7 @@ export class Workspaces {
     if (!exists) await this.git(dir, ['checkout', '-q', '-b', integration]);
     try {
       await this.git(dir, ['fetch', '-q', 'origin', sha]).catch(() => undefined);
-      await this.git(dir, ['-c', 'user.name=The AI Company', '-c', 'user.email=platform@aic.local', 'merge', '--no-ff', '-q', '-m', message, sha]);
+      await this.git(dir, ['-c', 'user.name=AIC', '-c', 'user.email=platform@aic.local', 'merge', '--no-ff', '-q', '-m', message, sha]);
     } catch (e) {
       const conflicted = (await this.git(dir, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).split('\n').filter(Boolean);
       await this.git(dir, ['merge', '--abort']).catch(() => undefined);

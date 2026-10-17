@@ -51,7 +51,7 @@ async function resolveEmployee(app: App, ref: string): Promise<{ id: string; dis
   return r.rows[0];
 }
 
-const HELP = `${c.b('aic')} — The AI Company (you bring the infrastructure; the platform governs the work)
+const HELP = `${c.b('AIC')}: you bring the infrastructure, the platform governs the work
 
 ${c.b('Setup')}
   aic init [--company "Acme"] [--ceo "Your Name"]   create aic.config.yaml (if missing) and the company ledger

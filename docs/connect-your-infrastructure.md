@@ -1,6 +1,6 @@
 # Connect your infrastructure
 
-The AI Company runs entirely on resources the company provides. Nothing is hosted by the platform
+AIC runs entirely on resources the company provides. Nothing is hosted by the platform
 vendor. This guide covers each resource and the production checklist.
 
 `aic.config.yaml` only ever holds the **names** of environment variables. The secrets themselves go in

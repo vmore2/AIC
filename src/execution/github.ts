@@ -14,7 +14,7 @@ export class GitHubApi {
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${this.base}/repos/${this.repo}${path}`, {
       method,
-      headers: { authorization: `Bearer ${this.token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'content-type': 'application/json', 'user-agent': 'the-ai-company' },
+      headers: { authorization: `Bearer ${this.token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'content-type': 'application/json', 'user-agent': 'aic' },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const text = await res.text();

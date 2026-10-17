@@ -8,7 +8,7 @@ import { DepartmentSchema, type Department } from './schema.js';
 import { compileTeam, isTeamSpec, starterSpec } from './teamSpec.js';
 import { validateDepartment, validateOrganization, type Finding } from './validate.js';
 
-/** Recommended teams ship with the platform (curated by The AI Company). */
+/** Recommended teams ship with the platform (curated by AIC). */
 export const RECOMMENDED_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../templates/recommended');
 
 export interface CatalogEntry {

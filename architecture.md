@@ -1,8 +1,8 @@
-# The AI Company: Architecture and Implementation Blueprint
+# AIC: Architecture and Implementation Blueprint
 
 | Field | Value |
 |---|---|
-| Document | `architecture.md`, the foundational architecture for The AI Company |
+| Document | `architecture.md`, the foundational architecture for AIC |
 | Status | Draft v1.0, for engineering review |
 | Date | 2026-10-08 |
 | Audience | Founding engineering team, security reviewers, technical advisors |
@@ -64,7 +64,7 @@
 
 ### 1.1 Mission
 
-The AI Company lets a human CEO create, staff and direct AI-powered organizations, such as engineering, design, research or operations departments, that perform real business work. They do it through structured delegation, persistent state, independent verification and human oversight set to the level the CEO chooses.
+AIC lets a human CEO create, staff and direct AI-powered organizations, such as engineering, design, research or operations departments, that perform real business work. They do it through structured delegation, persistent state, independent verification and human oversight set to the level the CEO chooses.
 
 The product is **not** a chat interface with many personas. It is an **operating system for accountable delegated work**, in which AI models act as reasoning and execution participants inside a system that keeps its own records.
 
@@ -281,7 +281,7 @@ Invariants are **testable statements that must always hold**. Each has an enforc
 
 ### 4.1 Architecture in One Paragraph
 
-The AI Company is a **control plane** built around a PostgreSQL **Work Ledger**, which is the single source of truth for objectives, requirements, tasks, assignments, criteria, approvals, artifacts, evidence, budgets and audit history. All changes flow through a deterministic **Transition Engine** that enforces the task state machine, authorization and idempotency. Each change commits in one transaction with an append-only, hash-chained event and an outbox message. **Temporal** workflows drive execution: they dispatch runs, wait for dependencies and human decisions, and retry failed steps. Workflows only *request* transitions. An **Agent Runtime** runs each AI employee's reasoning loop inside Temporal activities and talks to models through a **Model Gateway**. It can affect the world only through a **Tool Gateway** that checks every call against a Cedar **Policy Engine** and the current task lease. Side effects happen in an **Execution Plane** of sandboxes and connectors that records intent and outcome and reconciles uncertainty. A **Verification Service** produces evidence that is independent of the producer, and a deterministic **Completion Evaluator** decides acceptance. **Projections** feed the CEO dashboard, reports, webhooks and an event stream. The CEO governs everything through operating modes, approvals and an emergency stop.
+AIC is a **control plane** built around a PostgreSQL **Work Ledger**, which is the single source of truth for objectives, requirements, tasks, assignments, criteria, approvals, artifacts, evidence, budgets and audit history. All changes flow through a deterministic **Transition Engine** that enforces the task state machine, authorization and idempotency. Each change commits in one transaction with an append-only, hash-chained event and an outbox message. **Temporal** workflows drive execution: they dispatch runs, wait for dependencies and human decisions, and retry failed steps. Workflows only *request* transitions. An **Agent Runtime** runs each AI employee's reasoning loop inside Temporal activities and talks to models through a **Model Gateway**. It can affect the world only through a **Tool Gateway** that checks every call against a Cedar **Policy Engine** and the current task lease. Side effects happen in an **Execution Plane** of sandboxes and connectors that records intent and outcome and reconciles uncertainty. A **Verification Service** produces evidence that is independent of the producer, and a deterministic **Completion Evaluator** decides acceptance. **Projections** feed the CEO dashboard, reports, webhooks and an event stream. The CEO governs everything through operating modes, approvals and an emergency stop.
 
 ### 4.2 Why a Ledger *and* an Orchestrator (and Not Just One)
 
@@ -365,7 +365,7 @@ Dedicated vector databases, graph databases and Kafka are deferred until a measu
 flowchart LR
     CEO([CEO / Human Principals])
     ADM([Org Admins / Approvers])
-    subgraph AIC[The AI Company Platform]
+    subgraph AIC[AIC Platform]
         CP[Control Plane]
         EP[Execution Plane]
     end
@@ -3696,7 +3696,7 @@ Six screens:
 **Wireframe: Home**
 
 ```text
-┌ The AI Company ─ Acme Inc ─────────────── Mode: PLAN GATES (M4) ── [■ EMERGENCY STOP] ┐
+┌ AIC ──────────── Acme Inc ─────────────── Mode: PLAN GATES (M4) ── [■ EMERGENCY STOP] ┐
 │ Decisions needed: 3   Escalations: 1   Unknown external actions: 0   Spend today: $84  │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ Billing service v1        AT RISK   Verified 38% ▓▓▓▓░░░░░░  Claimed 55% (Δ17)        │
@@ -3929,7 +3929,7 @@ The platform produces **evidence and enforceable controls**. It does not transfe
 |---|---|
 | Customer organization | Deployer of the AI system. Responsible for use-case legality, human oversight design, approvals given by its staff, and data it provides. Under the EU AI Act, deployers of high-risk systems have obligations including human oversight and log retention [R71]. GDPR controller obligations, including Art. 22 limits [R73] |
 | Customer's human approvers | Decisions they approve (organizational accountability per the customer's governance) |
-| The AI Company (vendor) | Platform security, correctness of enforcement mechanisms, documented behavior, contractual SLAs, data processor obligations (DPA) |
+| AIC (vendor) | Platform security, correctness of enforcement mechanisms, documented behavior, contractual SLAs, data processor obligations (DPA) |
 | Model providers | Per their terms with the customer (BYOK) |
 | AI employees | **None (legally).** They are software configurations. The ledger attributes *actions* to them for traceability, and *responsibility* always resolves to the human principals who configured, delegated and approved |
 
@@ -3966,7 +3966,7 @@ The platform supports governance frameworks: NIST AI RMF and its Generative AI P
 
 ## 17. Deployment Architecture and Operational Requirements
 
-> **Decision update (2026-10-08).** The product owner's direction is that the platform vendor hosts no infrastructure. Every company runs The AI Company against resources it provides: database, model providers and keys, code/deliverable hosting, and an isolated sandbox. The **Self-Hosted** tier is therefore the only tier for now. The reference implementation (`README.md`, `docs/connect-your-infrastructure.md`) follows the single-Postgres path in §4.3. It uses an outbox-driven orchestrator implementing `OrchestratorPort` (§7.10), so the only stateful dependency a customer must run is PostgreSQL. A Temporal adapter remains the scale-out option. The Managed and Hybrid tiers described below are retained as future options and are not current commitments.
+> **Decision update (2026-10-08).** The product owner's direction is that the platform vendor hosts no infrastructure. Every company runs AIC against resources it provides: database, model providers and keys, code/deliverable hosting, and an isolated sandbox. The **Self-Hosted** tier is therefore the only tier for now. The reference implementation (`README.md`, `docs/connect-your-infrastructure.md`) follows the single-Postgres path in §4.3. It uses an outbox-driven orchestrator implementing `OrchestratorPort` (§7.10), so the only stateful dependency a customer must run is PostgreSQL. A Temporal adapter remains the scale-out option. The Managed and Hybrid tiers described below are retained as future options and are not current commitments.
 
 ### 17.1 Platform vs. Customer Ownership
 
@@ -5255,7 +5255,7 @@ The trace shows that the worker's claim (AC-3 "partially met") never counted. Ac
 ```yaml
 connector: github
 manifest_version: 3.2.0
-publisher: the-ai-company (first-party)
+publisher: aic (first-party)
 auth:
   type: github_app
   installation_scopes: { contents: write, pull_requests: write, checks: read, metadata: read }
@@ -5513,7 +5513,7 @@ Each scenario has an automated harness. **Pass = the attack fails, and the attem
 
 ```yaml
 openapi: 3.1.0
-info: { title: The AI Company API, version: "1.0.0" }
+info: { title: AIC API, version: "1.0.0" }
 servers: [ { url: https://api.theaicompany.example/v1 } ]
 components:
   securitySchemes:
