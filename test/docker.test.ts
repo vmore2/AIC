@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { createApp, type App } from '../src/app.js';
 import { ConfigSchema } from '../src/config/config.js';
 import { SYSTEM, type Principal } from '../src/domain/types.js';
-import { DockerSandbox } from '../src/execution/sandbox.js';
+import { defaultSandboxUser, DockerSandbox } from '../src/execution/sandbox.js';
 import { runDoctor } from '../src/ops/doctor.js';
 import { dept } from './helpers.js';
 
@@ -32,7 +32,8 @@ describe.skipIf(!dockerUp)('Docker sandbox, live (requires Docker + node:22-book
     ].join('; '), 120_000);
     delete process.env['AIC_FAKE_SECRET'];
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain('uid=1000');
+    expect(r.stdout).toContain(`uid=${defaultSandboxUser().split(':')[0]}`);
+    expect(r.stdout).not.toContain('uid=0');
     expect(r.stdout).toContain('ROOTFS-READONLY');
     expect(r.stdout).toContain('hello');
     expect(r.stdout).toContain('WORKSPACE-WRITABLE');

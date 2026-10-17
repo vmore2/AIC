@@ -1,4 +1,6 @@
 // `aic doctor`: readiness checks against the customer's own infrastructure.
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { App } from '../app.js';
 import { verifyChain } from '../ledger/engine.js';
 import { loadCatalog } from '../org/catalog.js';
@@ -64,9 +66,18 @@ export async function runDoctor(app: App): Promise<Check[]> {
   // Sandbox
   const sb = app.sandbox;
   if (sb.isolated) {
-    const probe = await sb.exec(process.cwd(), 'echo ok', 60_000).catch((e) => ({ exitCode: null, stdout: '', stderr: String(e), timedOut: false }));
-    add('Sandbox', probe.exitCode === 0 ? 'pass' : 'fail', probe.exitCode === 0 ? `${sb.description}` : `${sb.description}: ${probe.stderr.slice(0, 160)}`,
-      probe.exitCode === 0 ? undefined : 'Start Docker and pull the sandbox image');
+    // Probe like a real run: a workspace the platform created, which the sandboxed command must read and write.
+    mkdirSync(app.workspaces.root, { recursive: true });
+    const ws = mkdtempSync(path.join(app.workspaces.root, 'doctor-'));
+    try {
+      writeFileSync(path.join(ws, 'probe.txt'), 'probe');
+      const probe = await sb.exec(ws, 'cat probe.txt && echo ok > written.txt', 60_000).catch((e) => ({ exitCode: null, stdout: '', stderr: String(e), timedOut: false }));
+      const ran = probe.exitCode !== null && !/Unable to find image|Cannot connect|error during connect|not found/i.test(probe.stderr);
+      const ok = probe.exitCode === 0 && probe.stdout.includes('probe') && existsSync(path.join(ws, 'written.txt'));
+      add('Sandbox', ok ? 'pass' : 'fail', ok ? `${sb.description}` : `${sb.description}: ${(probe.stderr || 'the sandboxed command could not read and write its workspace').slice(0, 160)}`,
+        ok ? undefined : ran ? 'Commands in the container cannot use the workspace: run the platform as a regular (non-root) user, or set sandbox.docker.user to the uid:gid that owns the storage folder'
+          : 'Start Docker and pull the sandbox image');
+    } finally { rmSync(ws, { recursive: true, force: true }); }
   } else add('Sandbox', cfg.sandbox.allow_unisolated_local ? 'warn' : 'fail', sb.description,
     'Production: sandbox: { kind: docker } (Docker installed) or your own microVM/gVisor sandbox');
 

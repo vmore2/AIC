@@ -40,7 +40,19 @@ export class LocalProcessSandbox implements SandboxPort {
   }
 }
 
-export interface DockerSandboxOptions { image: string; memory: string; cpus: number; pids: number; network: 'none' | 'bridge'; dockerBin?: string }
+export interface DockerSandboxOptions { image: string; memory: string; cpus: number; pids: number; network: 'none' | 'bridge'; dockerBin?: string; user?: string }
+
+/**
+ * Who commands run as inside the container: never root. On Linux the container sees the workspace's real
+ * owner, so commands run as the platform's own uid:gid (otherwise they could not read or write the workspace
+ * the platform cloned). Docker Desktop (Windows, macOS) maps file ownership itself, so a fixed 1000:1000 works
+ * there. A platform running as root still gets an unprivileged container user; `aic doctor` then reports that
+ * the workspace isn't writable.
+ */
+export function defaultSandboxUser(platform = process.platform, ids = { uid: process.getuid?.(), gid: process.getgid?.() }): string {
+  if (platform === 'linux' && ids.uid !== undefined && ids.gid !== undefined && ids.uid !== 0) return `${ids.uid}:${ids.gid}`;
+  return '1000:1000';
+}
 
 export class DockerSandbox implements SandboxPort {
   readonly isolated = true;
@@ -56,7 +68,7 @@ export class DockerSandbox implements SandboxPort {
       '--cpus', String(this.o.cpus), '--pids-limit', String(this.o.pids),
       '--read-only', '--tmpfs', '/tmp:rw,noexec,nosuid,size=256m',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-      '--user', '1000:1000',
+      '--user', this.o.user ?? defaultSandboxUser(),
       '-e', 'HOME=/tmp', '-e', 'CI=1', '-e', 'NO_COLOR=1',
       '-v', `${cwd}:/workspace:rw`, '-w', '/workspace',
       this.o.image, 'sh', '-c', command,

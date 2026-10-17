@@ -6,7 +6,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, type App } from '../src/app.js';
 import { ConfigSchema, type ModelProfile } from '../src/config/config.js';
 import { SYSTEM } from '../src/domain/types.js';
-import { DockerSandbox } from '../src/execution/sandbox.js';
+import { defaultSandboxUser, DockerSandbox } from '../src/execution/sandbox.js';
 import { AnthropicModel, OpenAICompatibleModel, ProviderError } from '../src/runtime/modelPort.js';
 import { runDoctor } from '../src/ops/doctor.js';
 
@@ -14,13 +14,21 @@ const dockerUp = (() => { try { execFileSync('docker', ['info'], { stdio: 'ignor
 
 describe('Docker sandbox', () => {
   const sb = new DockerSandbox({ image: 'node:22-bookworm-slim', memory: '2g', cpus: 2, pids: 512, network: 'none' });
+  it('runs as the platform user on Linux (so it can use the workspace), never as root', () => {
+    expect(defaultSandboxUser('linux', { uid: 1001, gid: 118 })).toBe('1001:118');
+    expect(defaultSandboxUser('linux', { uid: 0, gid: 0 })).toBe('1000:1000');
+    expect(defaultSandboxUser('win32', { uid: undefined, gid: undefined })).toBe('1000:1000');
+    expect(defaultSandboxUser('darwin', { uid: 501, gid: 20 })).toBe('1000:1000');
+    expect(new DockerSandbox({ image: 'x', memory: '1g', cpus: 1, pids: 64, network: 'none', user: '2000:2000' }).args('/w', 'true', 'n')).toContain('2000:2000');
+  });
   it('runs every agent command with no network, no capabilities, read-only root, non-root user, and limits', () => {
     const a = sb.args('/work/run1', 'npm test', 'aic-sbx-x');
     const pair = (flag: string) => a[a.indexOf(flag) + 1];
     expect(pair('--network')).toBe('none');
     expect(pair('--cap-drop')).toBe('ALL');
     expect(pair('--security-opt')).toBe('no-new-privileges');
-    expect(pair('--user')).toBe('1000:1000');
+    expect(pair('--user')).toBe(defaultSandboxUser());
+    expect(pair('--user')).not.toMatch(/^0:/);
     expect(pair('--memory')).toBe('2g');
     expect(pair('--pids-limit')).toBe('512');
     expect(a).toContain('--read-only');

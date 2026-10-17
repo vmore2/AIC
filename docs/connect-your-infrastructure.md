@@ -143,7 +143,11 @@ sandbox:
 
 Each command runs in a fresh container with no network, all capabilities dropped,
 `no-new-privileges`, a read-only root filesystem, a non-root user, memory/CPU/PID limits, and only
-the run's workspace mounted. Use an image that has your toolchain. With `network: none`, dependency
+the run's workspace mounted. Use an image that has your toolchain. Commands never run as root. On Linux
+they run as the platform's own uid:gid, so the workspace the platform cloned is theirs to read and write.
+Run the platform as a regular user; to pick the ids yourself, set `docker: { user: "1000:1000" }`. On
+Docker Desktop (Windows, macOS) the default is 1000:1000. `aic doctor` checks that a sandboxed command can
+read and write a workspace. With `network: none`, dependency
 installs must already be in the image or the workspace.
 
 For stronger isolation use a microVM (e.g. self-hosted E2B/Firecracker) or Kubernetes Agent Sandbox

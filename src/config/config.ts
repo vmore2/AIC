@@ -67,6 +67,8 @@ export const ConfigSchema = z.object({
       cpus: z.number().positive().default(2),
       pids: z.number().int().positive().default(512),
       network: z.enum(['none', 'bridge']).default('none'),
+      /** uid:gid commands run as (never root). Default: the platform's own ids on Linux, 1000:1000 elsewhere. */
+      user: z.string().regex(/^[1-9]\d*:\d+$/, 'must be a non-root uid:gid, e.g. 1000:1000').optional(),
     }).default({}),
   }).default({}),
   /** Where run workspaces and transcripts are stored (customer storage). */

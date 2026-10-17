@@ -264,7 +264,9 @@ sandbox:
 
 Each command runs in a fresh container with no network, no Linux capabilities, a read-only root
 filesystem, a non-root user, memory/CPU/process limits, and only the run's workspace mounted. Use an image
-that has your toolchain. Pull it once with `docker pull node:22-bookworm-slim`.
+that has your toolchain. Pull it once with `docker pull node:22-bookworm-slim`. Commands never run as root.
+On Linux they run as the user the platform runs as, so run the platform as a regular user (`aic doctor`
+checks that sandboxed commands can read and write a workspace).
 
 Without Docker, `sandbox: { kind: local, allow_unisolated_local: true }` runs commands as plain local
 processes, with a scrubbed environment and timeouts but **no isolation**. Use that only for evaluation on a
@@ -425,7 +427,7 @@ Add `--config path/to/aic.config.yaml` to use another company folder, and `--ver
 | `models.profiles[]` | `key`, `provider` (`openai_compatible` · `anthropic` · `scripted`), `model`, `base_url`, `api_key_env`, `family`, `price_per_million`, `context_tokens` | the offline demo model |
 | `models.default` · `models.assignments` | Default profile; role key → profile | |
 | `code_hosting` | `{ kind: local, path }` or `{ kind: github, repo, token_env, base_branch, api_url }` | local repo in `.aic/repo` |
-| `sandbox` | `{ kind: docker, docker: { image, memory, cpus, pids, network } }` or `{ kind: local, allow_unisolated_local: true }` | local, refused unless allowed |
+| `sandbox` | `{ kind: docker, docker: { image, memory, cpus, pids, network, user } }` or `{ kind: local, allow_unisolated_local: true }` | local, refused unless allowed |
 | `defaults.mode` | Oversight level for new teams (`M1`…`M5`) | `M4` (plan gates) |
 | `defaults.project_settings.test_command` | How code is tested | `npm test` (starter: `node --test`) |
 | `auth.google` | `client_id`, `client_secret_env`, `public_url`, `allowed_domain` | off |
