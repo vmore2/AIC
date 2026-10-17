@@ -66,8 +66,21 @@ export async function openPostgres(connectionString: string): Promise<Db> {
 
 const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 
+/** A restricted runtime role (docs/production-roles.sql) cannot change the schema; say how to apply migrations. */
+function ownerNeeded(what: string, e: unknown): Error {
+  if ((e as { code?: string }).code !== '42501') return e as Error;
+  return new Error(`${what} needs the database owner, but the platform is connected as a restricted role. Run \`aic doctor\` once with the owner's `
+    + 'DATABASE_URL (it applies migrations), re-run docs/production-roles.sql, then switch back to the restricted role.');
+}
+
 export async function migrate(db: Db): Promise<string[]> {
-  await db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
+  // Only create the bookkeeping table when missing: even CREATE TABLE IF NOT EXISTS needs CREATE rights on the
+  // schema, which the restricted production role deliberately lacks.
+  const exists = (await db.query<{ t: string | null }>(`SELECT to_regclass('schema_migrations')::text AS t`)).rows[0]?.t;
+  if (!exists) {
+    try { await db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); }
+    catch (e) { throw ownerNeeded('Creating the ledger schema', e); }
+  }
   const done = new Set((await db.query<{ name: string }>('SELECT name FROM schema_migrations')).rows.map((r) => r.name));
   const applied: string[] = [];
   for (const f of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
@@ -75,7 +88,8 @@ export async function migrate(db: Db): Promise<string[]> {
     if (!/^[\w.-]+$/.test(f)) throw new Error(`Unsafe migration file name: ${f}`);
     const sql = readFileSync(path.join(MIGRATIONS_DIR, f), 'utf8');
     // One multi-statement script per migration, atomically (both drivers use the simple query protocol here).
-    await db.exec(`BEGIN;\n${sql}\nINSERT INTO schema_migrations(name) VALUES ('${f}');\nCOMMIT;`);
+    try { await db.exec(`BEGIN;\n${sql}\nINSERT INTO schema_migrations(name) VALUES ('${f}');\nCOMMIT;`); }
+    catch (e) { await db.exec('ROLLBACK').catch(() => undefined); throw ownerNeeded(`Database migration ${f}`, e); }
     applied.push(f);
   }
   return applied;

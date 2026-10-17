@@ -3,18 +3,35 @@
 The AI Company runs entirely on resources the company provides. Nothing is hosted by the platform
 vendor. This guide covers each resource and the production checklist.
 
+`aic.config.yaml` only ever holds the **names** of environment variables. The secrets themselves go in
+`.env` next to it: copy [`.env.example`](../.env.example), which lists every variable with a comment.
+The platform refuses a config file that has a secret pasted into a `*_env` field, and it does so without
+echoing the secret.
+
 ## 1. Database (the work ledger)
 
-The ledger is the source of truth for all work. Use your own PostgreSQL 17+:
+The ledger is the source of truth for all work. Use your own PostgreSQL 16 or newer (tested on 16 and 17):
 
 ```yaml
 database:
-  url_env: DATABASE_URL     # postgres://user:pass@host:5432/aic — read from the environment
+  url_env: DATABASE_URL     # the NAME of the variable; put postgres://user:pass@host:5432/aic in .env
 ```
 
-Migrations run automatically on start. For production, also apply
-[`production-roles.sql`](production-roles.sql). It enforces at the database level that only the
-Transition Engine can write protected tables (INV-1) and that history is append-only (INV-10).
+Migrations run automatically on start. For production, run the platform as a restricted role. That
+enforces at the database level that only the Transition Engine can write protected tables (INV-1), and that
+history is append-only (INV-10), even for the engine:
+
+1. Start once as the database **owner** (for example `aic doctor` with the owner's `DATABASE_URL`). This
+   applies the migrations.
+2. As the owner, run [`production-roles.sql`](production-roles.sql):
+   `psql "$OWNER_DATABASE_URL" -v ON_ERROR_STOP=1 -f docs/production-roles.sql`
+3. Change the role passwords (`ALTER ROLE aic_engine PASSWORD '…'`), then point `DATABASE_URL` at
+   `aic_engine`.
+
+After an update that adds a migration, repeat steps 1–2; the script is safe to re-run. If you forget, the
+platform stops with a message that says exactly this, rather than failing halfway. This path is covered by
+an automated test against a real PostgreSQL: the engine can work, but cannot rewrite history, delete
+work, or change the schema.
 
 For evaluation, `database: { local_path: .aic/db }` uses an embedded PostgreSQL (PGlite) with the same SQL.
 
@@ -70,9 +87,15 @@ documents such as reports, memos, and briefs. Evidence binds to exact commits.
 code_hosting:
   kind: github
   repo: your-org/your-repo
-  token_env: GITHUB_TOKEN    # fine-grained token: contents read/write on this repo only
+  token_env: GITHUB_TOKEN    # the NAME of the variable; the token itself goes in .env
   base_branch: main
 ```
+
+Create a [fine-grained token](https://github.com/settings/personal-access-tokens) with access to this one
+repository only, with **Contents** and **Pull requests** set to read and write. Put it in `.env` as
+`GITHUB_TOKEN=github_pat_…`. The token travels to git as a per-command HTTP header. It is never written into
+a clone's `.git/config`, so employees' sandbox commands cannot read it. It is also scrubbed from every error
+message.
 
 With GitHub, an approved release opens (or reuses) a pull request from the integration branch into
 the base branch. Its description is generated from the ledger: requirements, accepted work, and
@@ -135,9 +158,12 @@ trusted evaluation machine.
 - `aic serve` starts the dashboard, the API (localhost only, token-protected), and the orchestrator.
   For multi-user or networked access, put it behind your SSO with MFA. Governance actions assume a
   step-up-authenticated CEO session.
+- **Windows:** git cannot reliably work with paths longer than about 245 characters, and run workspaces
+  sit about 50 characters below your storage folder. Keep the company folder reasonably close to the drive
+  root, or set `storage_path: C:/aic/storage`. `aic doctor` warns when the storage path is too deep.
 - Only **one orchestrator per company** should run. Crashes are safe: leases expire, and runs are
   retried within their attempt limits.
-- Customer policies: drop extra `.cedar` files into a `policies/` folder next to your templates.
+- Customer policies: drop extra `.cedar` files into a `policies/` folder next to `aic.config.yaml` (`policies_path`).
   Baseline `forbid` rules cannot be weakened.
 
 ## Team access
@@ -200,11 +226,11 @@ tells you what to fix before production.
 
 ## Production checklist
 
-- [ ] PostgreSQL with PITR backups; `production-roles.sql` applied
+- [ ] PostgreSQL 16+ with PITR backups; `production-roles.sql` applied; platform running as `aic_engine`
 - [ ] Model profiles for every role; reviewers on a different model family
-- [ ] Isolated sandbox implemented; `allow_unisolated_local` disabled
-- [ ] Code host with branch protection on the base branch; least-privilege token
-- [ ] `AIC_CREDENTIAL_SECRET` set from your secret manager
+- [ ] `sandbox: { kind: docker }` (or your own isolated sandbox); `allow_unisolated_local` removed
+- [ ] Code host with branch protection on the base branch; a fine-grained token for that one repository
+- [ ] `AIC_CREDENTIAL_SECRET` and `AIC_MASTER_KEY` set from your secret manager (back up the master key: the vault cannot be read without it)
 - [ ] Google sign-in (or your SSO) with MFA on the Google accounts; dashboard served over HTTPS; `AIC_DASHBOARD_TOKEN` and `AIC_SESSION_SECRET` set
 - [ ] `AIC_SPEND_CAP_USD` and a provider-side budget limit
 - [ ] Operating modes chosen per department (finance, legal, people ops default to Supervised)

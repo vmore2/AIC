@@ -7,12 +7,21 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { MODES } from '../domain/types.js';
 
+/**
+ * The NAME of an environment variable (e.g. GITHUB_TOKEN), never the secret itself. A pasted token would
+ * otherwise be looked up as a variable name, fail, and be echoed in the "is not set" error.
+ */
+const SECRET_SHAPE = /^(github_pat_|gh[pousr]_|sk-|sk_|xox[abpr]-|AIza|GOCSPX-|glpat-)/;
+export const EnvVarName = z.string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be the name of an environment variable (letters, digits, underscores), e.g. GITHUB_TOKEN — put the value itself in .env')
+  .refine((v) => !SECRET_SHAPE.test(v) && v.length <= 64, 'looks like a secret value, not a variable name: put the secret in .env (e.g. GITHUB_TOKEN=...) and write only the variable name here');
+
 export const ModelProfileSchema = z.object({
   key: z.string(),
   provider: z.enum(['openai_compatible', 'anthropic', 'scripted']),
   model: z.string(),
   base_url: z.string().url().optional(),
-  api_key_env: z.string().optional(),
+  api_key_env: EnvVarName.optional(),
   /** Vault id of a key the CEO entered in the dashboard (alternative to api_key_env). */
   api_key_secret: z.string().optional(),
   /** Lineage grouping used for reviewer independence (e.g. "openai", "anthropic", "llama"). */
@@ -28,7 +37,7 @@ export type ModelProfile = z.infer<typeof ModelProfileSchema>;
 export const ConfigSchema = z.object({
   company: z.object({ name: z.string() }),
   database: z.union([
-    z.object({ url_env: z.string() }),
+    z.object({ url_env: EnvVarName }),
     z.object({ local_path: z.string() }),
   ]).default({ local_path: '.aic/db' }),
   models: z.object({
@@ -39,7 +48,7 @@ export const ConfigSchema = z.object({
   }),
   code_hosting: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('local'), path: z.string() }),
-    z.object({ kind: z.literal('github'), repo: z.string(), token_env: z.string(), base_branch: z.string().default('main'), api_url: z.string().url().default('https://api.github.com') }),
+    z.object({ kind: z.literal('github'), repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be owner/name, e.g. your-org/your-repo'), token_env: EnvVarName, base_branch: z.string().default('main'), api_url: z.string().url().default('https://api.github.com') }),
   ]).default({ kind: 'local', path: '.aic/repo' }),
   defaults: z.object({
     mode: z.enum(MODES).default('M4'),
@@ -73,17 +82,17 @@ export const ConfigSchema = z.object({
   auth: z.object({
     google: z.object({
       client_id: z.string().min(10),
-      client_secret_env: z.string().default('GOOGLE_CLIENT_SECRET'),
+      client_secret_env: EnvVarName.default('GOOGLE_CLIENT_SECRET'),
       /** Must match the authorized redirect URI: <public_url>/auth/google/callback */
       public_url: z.string().url().default('http://localhost:4100'),
       allowed_domain: z.string().optional(),
     }).optional(),
-    session_secret_env: z.string().default('AIC_SESSION_SECRET'),
+    session_secret_env: EnvVarName.default('AIC_SESSION_SECRET'),
   }).default({}),
   /** Encrypts the secret vault (keys and passwords entered in the dashboard); generated into storage if unset. */
-  master_key_env: z.string().default('AIC_MASTER_KEY'),
+  master_key_env: EnvVarName.default('AIC_MASTER_KEY'),
   /** Signs run credentials; supply via env in production. */
-  credential_secret_env: z.string().default('AIC_CREDENTIAL_SECRET'),
+  credential_secret_env: EnvVarName.default('AIC_CREDENTIAL_SECRET'),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
@@ -92,7 +101,11 @@ export const DEFAULT_CONFIG_FILE = 'aic.config.yaml';
 export function loadConfig(file = DEFAULT_CONFIG_FILE, baseDir = process.cwd()): Config {
   const full = path.resolve(baseDir, file);
   if (!existsSync(full)) throw new Error(`Config not found at ${full}. Run \`aic init\` to create one.`);
-  const cfg = ConfigSchema.parse(parseYaml(readFileSync(full, 'utf8')));
+  let raw: unknown;
+  try { raw = parseYaml(readFileSync(full, 'utf8')); } catch (e) { throw new Error(`${full} is not valid YAML: ${(e as Error).message}`); }
+  const parsed = ConfigSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`${full} has problems:\n${parsed.error.issues.map((i) => `   - ${i.path.join('.') || '(top level)'}: ${i.message}`).join('\n')}`);
+  const cfg = parsed.data;
   const base = path.dirname(full);
   const abs = (p: string) => (path.isAbsolute(p) ? p : path.resolve(base, p));
   if ('local_path' in cfg.database) cfg.database = { local_path: abs(cfg.database.local_path) };
@@ -108,7 +121,8 @@ export function loadConfig(file = DEFAULT_CONFIG_FILE, baseDir = process.cwd()):
 
 export const STARTER_CONFIG = `# The AI Company — customer configuration.
 # You bring the infrastructure: database, model providers/keys, and code hosting.
-# Secrets are referenced by environment variable name only.
+# Secrets are referenced by environment variable NAME only. Put the values in a .env file next to this
+# one (the platform repository has .env.example listing every variable). Check your setup: aic doctor
 company:
   name: Acme Inc
 

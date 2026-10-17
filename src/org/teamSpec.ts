@@ -151,6 +151,8 @@ export function compileTeam(raw: unknown): CompileResult {
 
     // Acceptance criteria: deterministic anchors from deliverables, review, and human judgment.
     const criteria: CriterionTemplate[] = [];
+    // A lead that works with code owns integration work, which is checked like everything else.
+    if (category === 'manager' && doesCode) criteria.push({ kind: 'test_suite', statement: 'The integrated branch builds and the full test suite passes', independence: 'platform', required: true, check: { type: 'command', run: '${test_command}', timeout_s: 600 } });
     if (category !== 'reviewer' && category !== 'manager') {
       if (doesCode) criteria.push({ kind: 'test_suite', statement: 'All tests pass on the submitted commit', independence: 'platform', required: true, check: { type: 'command', run: '${test_command}', timeout_s: 600 } });
       for (const d of r.delivers) {

@@ -7,7 +7,7 @@ import { SYSTEM } from '../domain/types.js';
 import { DomainError, type StoredEvent } from '../ledger/engine.js';
 import type { CommandInput, CommandName, CommandOutput, Ledger } from '../ledger/ledger.js';
 import { getEmployee, getRun, getTask } from '../ledger/store.js';
-import { GitHubCodeHost, type Workspaces } from '../execution/codeHost.js';
+import { GitHubCodeHost, shortDir, type Workspaces } from '../execution/codeHost.js';
 import { GitHubError, type PullRequest } from '../execution/github.js';
 import type { SandboxPort } from '../execution/sandbox.js';
 import { runAgent, type RunOutcome } from '../runtime/agent.js';
@@ -55,7 +55,8 @@ export class Orchestrator {
 
   start(intervalMs = 500) {
     if (this.timer) return;
-    this.timer = setInterval(() => { void this.tick(); }, intervalMs);
+    // A failing tick (network blip, git error) is logged and retried on the next one; it must never kill the server.
+    this.timer = setInterval(() => { this.tick().catch((e) => this.log(`orchestrator tick FAILED: ${(e as Error).message}`)); }, intervalMs);
   }
   async stop() {
     if (this.timer) clearInterval(this.timer);
@@ -260,7 +261,7 @@ export class Orchestrator {
     }
     if (host instanceof GitHubCodeHost) { await this.releaseViaGitHub(host, objectiveId, sha, approvalId, actionId); return; }
     const { git } = await import('../execution/codeHost.js');
-    const dir = path.join(this.d.storageDir, 'workspaces', 'release', objectiveId);
+    const dir = path.join(this.d.workspaces.root, 'rel', shortDir(objectiveId));
     const { rmSync } = await import('node:fs');
     rmSync(dir, { recursive: true, force: true });
     try {
@@ -515,28 +516,8 @@ ${PLATFORM_RULES}`,
     const tasks = await q.query<{ id: string; status: string; kind: string; hold: string | null; version: string }>(
       `SELECT id, status, kind, hold, version FROM tasks WHERE status IN ('planned','ready','in_progress','submitted','verifying','in_review','changes_requested','accepted')`);
     for (const t of tasks.rows) {
-      const key = `repair:${t.id}:${t.version}`;
-      if (t.status === 'planned' && !t.hold) await this.tryReady(t.id, key);
-      else if (t.status === 'ready' && !t.hold) { if (await this.cmd('dispatchTask', { taskId: t.id }, `${key}:dispatch`)) n++; }
-      else if (t.status === 'in_progress' && !(await this.liveRunFor(t.id))) {
-        const live = await q.query<{ id: string }>(`SELECT r.id FROM runs r JOIN task_leases l ON l.run_id = r.id WHERE r.task_id = $1 AND r.status = 'running' AND l.state = 'active' AND l.expires_at >= now()`, [t.id]);
-        if (live.rows.length && !t.hold) { await this.startTaskRun(t.id); n++; }
-      }
-      else if (t.status === 'submitted') { if (await this.cmd('startVerification', { taskId: t.id }, `${key}:verify`)) n++; }
-      else if (t.status === 'verifying' && !this.verifying.has(t.id)) {
-        const pending = await this.hasUnverifiedDeterministic(t.id);
-        if (pending) { await this.verify(t.id); n++; }
-      } else if (t.status === 'in_review') {
-        const live = await q.query(`SELECT 1 FROM runs WHERE task_id = $1 AND mode = 'review' AND status = 'running'`, [t.id]);
-        if (!live.rows.length) {
-          const evaluated = await this.cmd('evaluateTask', { taskId: t.id }, `${key}:eval`);
-          if (evaluated?.status === 'in_review') { await this.startReview(t.id); n++; }
-        }
-      } else if (t.status === 'changes_requested') { if (await this.cmd('requeueAfterChanges', { taskId: t.id }, `${key}:requeue`)) n++; }
-      else if (t.status === 'accepted' && t.kind === 'planning') {
-        const kids = await q.query('SELECT 1 FROM tasks WHERE parent_task_id = $1 LIMIT 1', [t.id]);
-        if (!kids.rows.length) { await this.cmd('materializePlan', { planningTaskId: t.id }, `${key}:materialize`); n++; }
-      }
+      // One task that cannot be repaired right now (e.g. its workspace cannot be cloned) must not block the others.
+      try { n += await this.repairTask(t); } catch (e) { this.log(`repairing task ${t.id} FAILED (retried on the next tick): ${(e as Error).message.slice(0, 500)}`); }
     }
     // Review runs abandoned by a crash.
     const reviews = await q.query<{ id: string }>(`SELECT id FROM runs WHERE mode IN ('review','conversation') AND status = 'running'`);
@@ -545,6 +526,33 @@ ${PLATFORM_RULES}`,
       if (Date.now() - new Date(run.started_at).getTime() > 10 * 60_000) { await this.cmd('endRun', { runId: r.id, outcome: 'abandoned', reason: 'review worker lost' }, `abandon:${r.id}`); n++; }
     }
     return n;
+  }
+
+  private async repairTask(t: { id: string; status: string; kind: string; hold: string | null; version: string }): Promise<number> {
+    const q = this.d.ledger.db;
+    const key = `repair:${t.id}:${t.version}`;
+    if (t.status === 'planned' && !t.hold) await this.tryReady(t.id, key);
+    else if (t.status === 'ready' && !t.hold) { if (await this.cmd('dispatchTask', { taskId: t.id }, `${key}:dispatch`)) return 1; }
+    else if (t.status === 'in_progress' && !(await this.liveRunFor(t.id))) {
+      const live = await q.query<{ id: string }>(`SELECT r.id FROM runs r JOIN task_leases l ON l.run_id = r.id WHERE r.task_id = $1 AND r.status = 'running' AND l.state = 'active' AND l.expires_at >= now()`, [t.id]);
+      if (live.rows.length && !t.hold) { await this.startTaskRun(t.id); return 1; }
+    }
+    else if (t.status === 'submitted') { if (await this.cmd('startVerification', { taskId: t.id }, `${key}:verify`)) return 1; }
+    else if (t.status === 'verifying' && !this.verifying.has(t.id)) {
+      const pending = await this.hasUnverifiedDeterministic(t.id);
+      if (pending) { await this.verify(t.id); return 1; }
+    } else if (t.status === 'in_review') {
+      const live = await q.query(`SELECT 1 FROM runs WHERE task_id = $1 AND mode = 'review' AND status = 'running'`, [t.id]);
+      if (!live.rows.length) {
+        const evaluated = await this.cmd('evaluateTask', { taskId: t.id }, `${key}:eval`);
+        if (evaluated?.status === 'in_review') { await this.startReview(t.id); return 1; }
+      }
+    } else if (t.status === 'changes_requested') { if (await this.cmd('requeueAfterChanges', { taskId: t.id }, `${key}:requeue`)) return 1; }
+    else if (t.status === 'accepted' && t.kind === 'planning') {
+      const kids = await q.query('SELECT 1 FROM tasks WHERE parent_task_id = $1 LIMIT 1', [t.id]);
+      if (!kids.rows.length) { await this.cmd('materializePlan', { planningTaskId: t.id }, `${key}:materialize`); return 1; }
+    }
+    return 0;
   }
 
   private async hasUnverifiedDeterministic(taskId: string): Promise<boolean> {

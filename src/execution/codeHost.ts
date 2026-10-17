@@ -2,6 +2,7 @@
 // repository the CEO provides (a local repo for evaluation, or their GitHub repo).
 // Artifacts are identified by commit SHA and tree hash, so evidence binds to exact content.
 import { execFile } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -16,9 +17,20 @@ export function redactSecrets(s: string): string {
     .replace(/(authorization:\s*\w+\s+)\S+/gi, '$1***');
 }
 
+/**
+ * Run workspaces sit deep inside the company folder; on Windows that easily passes the 260-character path limit.
+ * Set through the environment (not `-c`) so the git processes git starts itself, like receive-pack on a local push,
+ * get it too. Appended after any GIT_CONFIG_* entries the code host already sets.
+ */
+function withPlatformConfig(env: Record<string, string>): Record<string, string> {
+  if (process.platform !== 'win32') return env;
+  const n = Number(env['GIT_CONFIG_COUNT'] ?? 0);
+  return { ...env, GIT_CONFIG_COUNT: String(n + 1), [`GIT_CONFIG_KEY_${n}`]: 'core.longpaths', [`GIT_CONFIG_VALUE_${n}`]: 'true' };
+}
+
 export async function git(cwd: string, args: string[], env: Record<string, string> = {}): Promise<string> {
   try {
-    const { stdout } = await run('git', args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env }, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+    const { stdout } = await run('git', args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...withPlatformConfig(env) }, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
     return stdout.trim();
   } catch (e) {
     // execFile errors embed the full command line and stderr; never let a credential escape into the ledger or logs.
@@ -46,7 +58,7 @@ export class LocalCodeHost implements CodeHost {
 
   /** Create a bare repository with an initial commit if it does not exist yet. */
   async ensure() {
-    if (existsSync(path.join(this.repoPath, 'HEAD')) || existsSync(path.join(this.repoPath, '.git'))) return;
+    if (existsSync(path.join(this.repoPath, 'HEAD')) || existsSync(path.join(this.repoPath, '.git'))) { await this.allowLongPaths(); return; }
     mkdirSync(this.repoPath, { recursive: true });
     await git(this.repoPath, ['init', '--bare', '--initial-branch=main']);
     const seed = `${this.repoPath}.seed`;
@@ -57,8 +69,15 @@ export class LocalCodeHost implements CodeHost {
     writeFileSync(path.join(seed, 'README.md'), '# Company deliverables\n\nManaged by The AI Company. Work happens on aic/* branches; accepted work is merged into objective integration branches.\n');
     await git(seed, ['add', '-A']);
     await git(seed, ['-c', 'user.name=The AI Company', '-c', 'user.email=platform@aic.local', 'commit', '-m', 'Initialize deliverables repository']);
+    await this.allowLongPaths();
     await git(seed, ['push', this.repoPath, 'main']);
     rmSync(seed, { recursive: true, force: true });
+  }
+
+  /** Pushes into a local repository run a receiving git that ignores our environment config (git strips it for
+   *  local transports), so on Windows the repository itself must allow paths past 260 characters. */
+  private async allowLongPaths() {
+    if (process.platform === 'win32') await git(this.repoPath, ['config', 'core.longpaths', 'true']);
   }
 }
 
@@ -66,7 +85,7 @@ export class GitHubCodeHost implements CodeHost {
   constructor(readonly repo: string, readonly tokenEnv: string, readonly baseBranch = 'main', readonly apiUrl = 'https://api.github.com') {}
   api(): GitHubApi {
     const token = process.env[this.tokenEnv];
-    if (!token) throw new Error(`${this.tokenEnv} is not set`);
+    if (!token) throw new Error(`Environment variable ${this.tokenEnv} is not set (add your GitHub token to .env)`);
     return new GitHubApi(this.repo, token, this.apiUrl);
   }
   get description() { return `GitHub ${this.repo}`; }
@@ -74,7 +93,7 @@ export class GitHubCodeHost implements CodeHost {
   /** The token travels as an HTTP header via git's environment config, so it never lands in .git/config. */
   gitEnv() {
     const token = process.env[this.tokenEnv];
-    if (!token) throw new Error(`${this.tokenEnv} is not set`);
+    if (!token) throw new Error(`Environment variable ${this.tokenEnv} is not set (add your GitHub token to .env)`);
     return { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
       GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}` };
   }
@@ -83,12 +102,19 @@ export class GitHubCodeHost implements CodeHost {
 
 export interface Workspace { dir: string; branch: string }
 
+/** A short, stable directory name for an id. Clone paths stay far below Windows' 260-character limit, which
+ *  Git for Windows does not reliably lift for its object store and refs even with core.longpaths. */
+export const shortDir = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 12);
+
 /** Workspaces live in customer storage; each run gets a fresh clone on its own branch namespace (§7.7). */
 export class Workspaces {
   constructor(readonly host: CodeHost, readonly root: string) {}
   private git(cwd: string, args: string[]): Promise<string> { return git(cwd, args, this.host.gitEnv()); }
 
   integrationBranch(objectiveId: string) { return `aic/${objectiveId}/integration`; }
+
+  /** Where a run's workspace is cloned. */
+  runDir(runId: string) { return path.join(this.root, 'r', shortDir(runId)); }
 
   async refExists(ref: string): Promise<boolean> {
     mkdirSync(this.root, { recursive: true });
@@ -105,11 +131,12 @@ export class Workspaces {
 
   async createForRun(runId: string, objectiveId: string, taskId: string): Promise<Workspace> {
     mkdirSync(this.root, { recursive: true });
-    const dir = path.join(this.root, 'runs', runId);
+    const dir = this.runDir(runId);
     rmSync(dir, { recursive: true, force: true });
     const integration = this.integrationBranch(objectiveId);
     const base = (await this.refExists(`refs/heads/${integration}`)) ? integration : this.host.baseBranch;
-    await this.git(this.root, ['clone', '--quiet', '--branch', base, this.host.remote(), dir]);
+    // Only the branch the run starts from: other runs' branches are none of its business.
+    await this.git(this.root, ['clone', '--quiet', '--single-branch', '--branch', base, this.host.remote(), dir]);
     const branch = `aic/${taskId}/${runId}`;
     await this.git(dir, ['checkout', '-q', '-b', branch]);
     return { dir, branch };
@@ -126,7 +153,7 @@ export class Workspaces {
 
   /** A fresh, independent checkout of an exact commit for verification (never the producer's workspace). */
   async checkoutForVerification(sha: string, label: string): Promise<string> {
-    const dir = path.join(this.root, 'verify', `${label}-${sha.slice(0, 12)}-${Date.now()}`);
+    const dir = path.join(this.root, 'v', `${shortDir(label).slice(0, 8)}-${sha.slice(0, 8)}-${randomBytes(3).toString('hex')}`);
     mkdirSync(path.dirname(dir), { recursive: true });
     await this.git(this.root, ['clone', '--quiet', '--no-checkout', this.host.remote(), dir]);
     await this.git(dir, ['checkout', '-q', '--detach', sha]);
@@ -147,7 +174,7 @@ export class Workspaces {
 
   /** Platform-performed merge of accepted work into the objective integration branch. */
   async mergeIntoIntegration(objectiveId: string, sha: string, message: string): Promise<{ ok: boolean; sha?: string; error?: string; conflicted?: string[] }> {
-    const dir = path.join(this.root, 'integration', objectiveId);
+    const dir = path.join(this.root, 'i', shortDir(objectiveId));
     rmSync(dir, { recursive: true, force: true });
     const integration = this.integrationBranch(objectiveId);
     const exists = await this.refExists(`refs/heads/${integration}`);

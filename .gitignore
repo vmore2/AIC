@@ -1,10 +1,22 @@
 node_modules/
 dist/
+coverage/
 .aic/
 *.log
+*.tmp
+
+# Secrets: never commit them. The template is .env.example.
 .env
+.env.*
+!.env.example
 
 # Local demo company (each customer keeps these in their own company folder)
 /aic.config.yaml
 /teams/
 /policies/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

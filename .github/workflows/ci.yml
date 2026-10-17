@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Validate the recommended teams
+        run: npx aic teams check
+      # Live model tests are opt-in (AIC_LIVE=1) and never run here: CI spends nothing.
+      # Docker-dependent tests run when their images are present and skip otherwise.
+      - run: npm test

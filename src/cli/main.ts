@@ -103,6 +103,10 @@ ${c.b('Operate')}
 
 ${c.b('Serve')}
   aic serve [--port 4100]                          dashboard + API + orchestrator
+
+${c.b('Options')}
+  --config <file>                                  another company's aic.config.yaml (default: ./aic.config.yaml)
+  --verbose                                        more progress output, and full error details
 `;
 
 async function main() {
@@ -112,6 +116,9 @@ async function main() {
   if (!cmd || cmd === 'help' || flags['help']) { console.log(HELP); return; }
 
   const cfgFile = String(flags['config'] ?? DEFAULT_CONFIG_FILE);
+  // The company's .env sits next to its config (the current directory's .env, loaded above, wins).
+  const companyEnv = path.join(path.dirname(path.resolve(cfgFile)), '.env');
+  if (companyEnv !== path.resolve('.env')) loadDotEnv(companyEnv);
   if (cmd === 'init' && !existsSync(cfgFile)) {
     writeFileSync(cfgFile, STARTER_CONFIG.replace('Acme Inc', String(flags['company'] ?? 'Acme Inc')));
     console.log(`${c.g('✔')} wrote ${cfgFile} — edit it to point at your database, model providers, and code hosting.`);
@@ -144,6 +151,8 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
     case 'init': {
       const exists = (await db.query('SELECT 1 FROM company')).rows.length;
       if (exists) { console.log('Company already initialized.'); return; }
+      if (typeof flags['company'] === 'string' && flags['company'] !== config.company.name)
+        console.log(c.dim(`  (using the company name from ${DEFAULT_CONFIG_FILE}: "${config.company.name}"; edit company.name there to change it)`));
       await ledger.run('bootstrapCompany', { companyName: config.company.name, ceoName: String(flags['ceo'] ?? 'CEO'), ceoEmail: typeof flags['ceo-email'] === 'string' ? flags['ceo-email'].toLowerCase() : undefined, defaultMode: config.defaults.mode, projectSettings: config.defaults.project_settings }, SYSTEM);
       console.log(`${c.g('✔')} ${config.company.name} is ready. Mode: ${config.defaults.mode} (${MODE_NAMES[config.defaults.mode]}).`);
       console.log(`Next: ${c.cy('aic teams')} to browse teams, then ${c.cy('aic hire engineering')}.`);
@@ -293,7 +302,12 @@ async function run(app: App, cmd: string, pos: string[], flags: Record<string, s
         console.log(`${c.b(o.title)} ${c.dim(o.department)}  ${deliveryColor(o.delivery)}`);
         console.log(`  verified ${bar(o.verifiedPct)} ${String(o.verifiedPct).padStart(3)}%   claimed ${String(o.claimedPct).padStart(3)}%${o.discrepancy > 0 ? c.y(`  (Δ ${o.discrepancy} unverified)`) : ''}`);
         console.log(c.dim(`  ${o.deliveryReason}  budget $${o.budget.spent.toFixed(2)} / $${o.budget.limit.toFixed(2)}  tasks ${Object.entries(o.tasks.byStatus).map(([k, v]) => `${k}:${v}`).join(' ') || '—'}  decisions waiting: ${o.pendingDecisions}  ${o.id}`));
+        const tasks = (await db.query<{ id: string; title: string; status: string; owner: string | null }>(
+          `SELECT t.id, t.title, t.status, e.display_name AS owner FROM tasks t LEFT JOIN employees e ON e.id = t.owner_employee_id
+           WHERE t.objective_id = $1 AND t.kind <> 'planning' ORDER BY t.created_at, t.title`, [o.id])).rows;
+        for (const t of tasks) console.log(`    ${(t.status === 'accepted' ? c.g : t.status === 'failed' ? c.r : c.y)(t.status.padEnd(19))} ${t.title.slice(0, 50).padEnd(50)} ${c.dim(`${t.owner ?? ''}  ${t.id}`)}`);
       }
+      console.log(c.dim(`\nDetails of one task: aic task <task-id>`));
       return;
     }
     case 'task': {
@@ -491,4 +505,13 @@ function teamsCommand(pos: string[], flags: Record<string, string | true>, cfgFi
   throw new Error('Usage: aic teams [list|show <team>|new <key>|check [team|file]|capabilities]');
 }
 
-main().catch((e) => { console.error(c.r(String((e as Error).stack ?? e))); process.exit(1); });
+// Setup problems (missing config, unset env vars, invalid YAML) print as one readable message; the stack trace
+// only with --verbose or AIC_DEBUG=1.
+main().catch((e) => {
+  const err = e as Error;
+  const debug = process.argv.includes('--verbose') || process.env['AIC_DEBUG'] === '1';
+  console.error(`${c.r('✖')} ${String(err?.message ?? e)}`);
+  if (debug) console.error(c.dim(String(err?.stack ?? '')));
+  else console.error(c.dim('   (run with --verbose for details)'));
+  process.exit(1);
+});

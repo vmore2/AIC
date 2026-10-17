@@ -2,7 +2,6 @@
 import type { App } from '../app.js';
 import { verifyChain } from '../ledger/engine.js';
 import { loadCatalog } from '../org/catalog.js';
-import { profileForRole } from '../runtime/models.js';
 
 export interface Check { check: string; level: 'pass' | 'warn' | 'fail'; detail: string; fix?: string }
 
@@ -25,13 +24,16 @@ export async function runDoctor(app: App): Promise<Check[]> {
   const chain = await verifyChain(db);
   add('Ledger integrity', chain.ok ? 'pass' : 'fail', chain.ok ? `hash chain intact (${chain.checked} events)` : `chain breaks at event ${chain.brokenAt}`, chain.ok ? undefined : 'Treat as a security incident; see docs');
 
-  // Models
-  const real = cfg.models.profiles.filter((p) => p.provider !== 'scripted');
-  if (!real.length) add('Model providers', 'warn', 'only the offline scripted model is configured (demo scenarios only)', 'Add an OpenAI-compatible or Anthropic profile in aic.config.yaml');
+  // Models: the ones in aic.config.yaml and the ones the CEO added in the dashboard (keys in the vault).
+  const real = app.models.profiles.filter((p) => p.provider !== 'scripted');
+  if (!real.length) add('Model providers', 'warn', 'only the offline scripted model is configured (demo scenarios only)', 'Dashboard → Setup → AI models, or add a profile in aic.config.yaml');
   for (const p of real) {
-    const has = !!(p.api_key_env && process.env[p.api_key_env]);
-    add(`Model: ${p.key}`, has ? 'pass' : 'fail', `${p.provider} ${p.model} (family ${p.family})`, has ? undefined : `Set ${p.api_key_env ?? 'api_key_env'} in the environment`);
-    if (p.price_per_million.input === 0 && p.price_per_million.output === 0) add(`Prices: ${p.key}`, 'warn', 'no prices configured; budgets will not limit spend', 'Set price_per_million to your contract prices');
+    const key = p.api_key_secret ? { ok: app.vault.has(p.api_key_secret), where: 'key in your vault', fix: 'Re-add the provider in Setup → AI models' }
+      : p.api_key_env ? { ok: !!process.env[p.api_key_env], where: `key from ${p.api_key_env}`, fix: `Set ${p.api_key_env} in .env` }
+      : { ok: true, where: 'no key (local endpoint)', fix: '' };
+    add(`Model: ${p.key}`, key.ok ? 'pass' : 'fail', `${p.provider} ${p.model} (family ${p.family}; ${key.where})`, key.ok ? undefined : key.fix);
+    if (p.price_per_million.input === 0 && p.price_per_million.output === 0 && (p.api_key_env || p.api_key_secret))
+      add(`Prices: ${p.key}`, 'warn', 'no prices configured; budgets will not limit spend', 'Set price_per_million to your contract prices');
   }
 
   // Teams
@@ -39,13 +41,18 @@ export async function runDoctor(app: App): Promise<Check[]> {
   const broken = catalog.entries.filter((e) => e.errors.length);
   add('Team catalog', broken.length ? 'fail' : 'pass', `${catalog.entries.length} teams (${catalog.entries.filter((e) => e.source === 'custom').length} custom)${broken.length ? `; errors in ${broken.map((b) => b.key).join(', ')}` : ''}`,
     broken.length ? 'Run aic teams check' : undefined);
-  const hired = (await db.query<{ key: string; template: { roles: { key: string; category: string }[] } }>('SELECT key, template FROM departments')).rows;
+  const hired = (await db.query<{ key: string }>('SELECT key FROM departments')).rows;
   add('Hired teams', hired.length ? 'pass' : 'warn', hired.length ? hired.map((h) => h.key).join(', ') : 'none', hired.length ? undefined : 'aic hire <team>');
+  // Reviewer independence, from the models the hired employees actually use.
+  const staff = (await db.query<{ team: string; role_key: string; category: string; model_profile: string }>(
+    `SELECT d.key AS team, e.role_key, e.category, e.model_profile FROM employees e JOIN departments d ON d.id = e.department_id WHERE e.status = 'active'`)).rows;
+  const familyOf = (key: string) => app.models.profiles.find((p) => p.key === key)?.family ?? key;
   for (const h of hired) {
-    const producers = new Set(h.template.roles.filter((r) => r.category !== 'reviewer').map((r) => profileForRole(cfg, r.key).family));
-    const sameFamily = h.template.roles.filter((r) => r.category === 'reviewer' && producers.has(profileForRole(cfg, r.key).family));
-    if (sameFamily.length) add(`Reviewer independence: ${h.key}`, 'warn', `${sameFamily.map((r) => r.key).join(', ')} use the same model family as producers; R2+ reviews will not count`,
-      'Assign reviewer roles to a profile from a different model family (models.assignments)');
+    const team = staff.filter((s) => s.team === h.key);
+    const producers = new Set(team.filter((s) => s.category !== 'reviewer').map((s) => familyOf(s.model_profile)));
+    const sameFamily = [...new Set(team.filter((s) => s.category === 'reviewer' && producers.has(familyOf(s.model_profile))).map((s) => s.role_key))];
+    if (sameFamily.length) add(`Reviewer independence: ${h.key}`, 'warn', `${sameFamily.join(', ')} use the same model family as producers; R2+ reviews will not count`,
+      'Give reviewer roles a model from a different family (Setup → Who uses which model, or models.assignments)');
   }
 
   // Code hosting
@@ -62,6 +69,13 @@ export async function runDoctor(app: App): Promise<Check[]> {
       probe.exitCode === 0 ? undefined : 'Start Docker and pull the sandbox image');
   } else add('Sandbox', cfg.sandbox.allow_unisolated_local ? 'warn' : 'fail', sb.description,
     'Production: sandbox: { kind: docker } (Docker installed) or your own microVM/gVisor sandbox');
+
+  // Windows path depth: git cannot reliably read clones deeper than ~245 characters, and workspaces add ~50.
+  if (process.platform === 'win32') {
+    const depth = app.workspaces.root.length;
+    if (depth > 180) add('Storage path length', 'warn', `${depth} characters deep (${app.workspaces.root}); git on Windows fails on very long paths`,
+      'Move the company folder closer to the drive root, or set storage_path: C:/aic/storage in aic.config.yaml');
+  }
 
   // Secrets and access
   add('Run credential secret', process.env[cfg.credential_secret_env] ? 'pass' : 'warn', process.env[cfg.credential_secret_env] ? 'from environment' : 'generated file in storage',

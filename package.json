@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Governed AI workforce platform: team architecture + authoritative work ledger. Customers bring their own database, model keys, and code hosting.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vmore2/AIC.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -12,10 +16,12 @@
   },
   "scripts": {
     "aic": "tsx src/cli/main.ts",
-    "dev": "tsx src/api/server.ts",
+    "serve": "tsx src/cli/main.ts serve",
+    "dev": "tsx src/cli/main.ts serve",
+    "doctor": "tsx src/cli/main.ts doctor",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "validate:org": "tsx src/cli/main.ts org validate"
+    "validate:org": "tsx src/cli/main.ts teams check"
   },
   "dependencies": {
     "@cedar-policy/cedar-wasm": "4.12.0",
@@ -23,6 +29,7 @@
     "fastify": "5.12.5",
     "mysql2": "3.24.4",
     "pg": "8.16.3",
+    "tsx": "4.20.6",
     "yaml": "2.9.1",
     "zod": "3.25.76"
   },
@@ -30,7 +37,6 @@
     "@types/node": "22.18.6",
     "@types/pg": "8.15.5",
     "fast-check": "4.3.0",
-    "tsx": "4.20.6",
     "typescript": "5.9.3",
     "vitest": "3.2.7"
   }

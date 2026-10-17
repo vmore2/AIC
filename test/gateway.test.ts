@@ -73,7 +73,7 @@ describe('Tool Gateway: every agent action is checked outside the model', () => 
   it('blocks path traversal and symlink escapes out of the workspace', async () => {
     expect((await call('fs.read', { path: '../../../../etc/passwd' })).content).toMatch(/escapes/);
     expect((await call('fs.write', { path: '.git/config', content: 'x' })).content).toMatch(/managed by the platform/);
-    const ws = path.join(dir, 'storage', 'workspaces', 'runs', runId);
+    const ws = app.workspaces.runDir(runId);
     try { symlinkSync(os.tmpdir(), path.join(ws, 'escape'), 'junction'); } catch { return; /* symlinks may be unavailable */ }
     expect((await call('fs.read', { path: 'escape/anything.txt' })).content).toMatch(/escapes the workspace via a link/);
   });

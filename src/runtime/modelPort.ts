@@ -35,7 +35,7 @@ export function apiKey(profile: ModelProfile, secret?: SecretLookup): string {
   }
   if (!profile.api_key_env) return ''; // keyless endpoint (e.g. Ollama on the CEO's machine)
   const k = process.env[profile.api_key_env];
-  if (!k) throw new ProviderError(`Environment variable ${profile.api_key_env} is not set for model profile ${profile.key}`, false);
+  if (!k) throw new ProviderError(`Environment variable ${profile.api_key_env} is not set for model profile ${profile.key} (add it to .env)`, false);
   return k;
 }
 
